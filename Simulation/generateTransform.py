@@ -8,7 +8,7 @@ image_size_xy = 2000  # Set the size of the image (400x400)
 image_size_z = 1   # Set the size of the z-axis
 
 # Number of particles
-num_particles = 200
+num_particles = 2000
 
 # Create folders to save the 2D image slices for original and rotated particles
 output_folder_static = 'black_image_stack_spherical_particles_full_z_correct_size_tiff_static'
@@ -17,11 +17,15 @@ os.makedirs(output_folder_static, exist_ok=True)
 os.makedirs(output_folder_rotated, exist_ok=True)
 
 # Generate random 3D positions for particles with x, y, and z in the range [0, image_size_xy] for x and y, [0, image_size_z] for z
+np.random.seed(0)
 x = np.random.uniform(low=100, high=image_size_xy - 1100, size=num_particles)
+np.random.seed(1)
 y = np.random.uniform(low=100, high=image_size_xy - 1100, size=num_particles)
+np.random.seed(2)
 z = np.random.uniform(low=0, high=image_size_z, size=num_particles)  # Now the z-range is [0, image_size_z]
 
 # Generate random sizes (radius) for each particle
+np.random.seed(0)
 sizes = np.random.uniform(low=3, high=4, size=num_particles)  # Particle sizes (radius in 3D)
 
 # Calculate mass (volume) of each particle
@@ -53,7 +57,7 @@ def calculate_displacement_crack(x, y, K_I, mu, kappa):
     return u_x, u_y
 
 def calculate_displacement_linear(x, y, K_I, mu, kappa):  
-    u_x = 6.0 * x / 10.0
+    u_x = 1.0 * x / 10.0
     # u_y = 1.0 * y / 10.0
     u_y = np.zeros_like(u_x)
     

@@ -19,9 +19,6 @@ class ReliabilityRAFTSolver :
         self.maxdisp_y = kwargs.get('y', maxdisp)
         self.maxdisp_z = kwargs.get('z', maxdisp)
 
-        # self.id_xyzt = id_xyzt
-        # self.xyzt = id_xyzt[['x', 'y', 'z', 'time']].to_numpy()
-
         self.dim = dim
         self.n_consider = kwargs.get('n_consider', 10)
         self.n_use = min(kwargs.get('n_use', 8), self.n_consider)
@@ -55,9 +52,10 @@ class ReliabilityRAFTSolver :
             if (p1 < 0) :
                 raise ValueError("Something wrong happened!")
             xyzti[p1, 4] = id
-            if (p2 < 0) :
-                xyzti[num_static_points + p2, 4] = -1
-            else :
+            # if (p2 < 0) :
+            #     xyzti[num_static_points + p2, 4] = -1
+            # else :
+            if (p2 > 0) :
                 xyzti[num_static_points + p2, 4] = id            
             id = id + 1
 
@@ -223,7 +221,7 @@ class ReliabilityRAFTSolver :
 
             else :
                 raise ValueError("Can't find neighbours for the particle, try to change params!")
-        
+
         trace = []
         for link_info in source_pts_stack :
             trace.append(np.array(pts1[link_info.src_id][:2]))
@@ -282,7 +280,8 @@ class ReliabilityRAFTSolver :
                     # Calculate the squared distance matrix for relative particle points
                     dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
                     # Cost is the sum of distances between n_use points
-                    pm.append(np.sum(np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])))
+                    tmp = np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use]
+                    pm.append(np.sum(np.sqrt(tmp)))
 
                 # Find the minimum penalty and corresponding point in pts2
                 penalty = min(pm)
@@ -327,7 +326,7 @@ def save_track_path_to_image(trace, image_path) :
     plt.close()
 
 
-def link_particles_and_compare(static_csv, deformed_csv, maxdisp):
+def link_particles_and_compare(static_csv, deformed_csv):
     # Load the static and deformed particle data from CSV files
     static_data = pd.read_csv(static_csv)
     deformed_data = pd.read_csv(deformed_csv)
@@ -340,7 +339,7 @@ def link_particles_and_compare(static_csv, deformed_csv, maxdisp):
     combined_data = pd.concat([static_data, deformed_data], ignore_index=True)
 
     # Track particles using track_raft function
-    solver = ReliabilityRAFTSolver(2, "SampleRandom", maxdisp, sample_ratio=0.1, sample_search_range_coef=3.5, first_ids=[1, 3, 5, 8, 15])
+    solver = ReliabilityRAFTSolver(2, "SampleRandom", maxdisp=200, sample_ratio=0.1, sample_search_range_coef=10, first_ids=[1, 3, 5, 8, 15])
 
     tracked_data, trace = solver.track_reliability_RAFT(combined_data)
     save_track_path_to_image(trace, 'trace.png')
@@ -372,4 +371,5 @@ def link_particles_and_compare(static_csv, deformed_csv, maxdisp):
 
 
 # Example usage:
-link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv', maxdisp=25)
+link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
+# link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv')

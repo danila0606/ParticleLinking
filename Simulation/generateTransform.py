@@ -2,6 +2,7 @@ import numpy as np
 import os
 import pandas as pd
 from PIL import Image
+import random
 
 # Define image sizes
 image_size_xy = 2000  # Set the size of the image (400x400)
@@ -9,6 +10,16 @@ image_size_z = 1   # Set the size of the z-axis
 
 # Number of particles
 num_particles = 2000
+
+add_blinking = True
+blinking_num = 20
+
+if add_blinking :
+    not_blinking_ids = [True] * (num_particles - blinking_num) + [False] * blinking_num
+    random.seed(0)      
+    random.shuffle(not_blinking_ids)
+else :
+    not_blinking_ids = [True] * num_particles
 
 # Create folders to save the 2D image slices for original and rotated particles
 output_folder_static = 'black_image_stack_spherical_particles_full_z_correct_size_tiff_static'
@@ -57,7 +68,7 @@ def calculate_displacement_crack(x, y, K_I, mu, kappa):
     return u_x, u_y
 
 def calculate_displacement_linear(x, y, K_I, mu, kappa):  
-    u_x = 1.0 * x / 10.0
+    u_x = 4.0 * x / 10.0
     # u_y = 1.0 * y / 10.0
     u_y = np.zeros_like(u_x)
     
@@ -81,14 +92,15 @@ valid_particles = (
 )
 
 # Save the deformed particle data to CSV
+all_deformed_particles = [a and b for a, b in zip(valid_particles, not_blinking_ids)]
 particle_data_deformed = pd.DataFrame({
-    'x': x_deformed[valid_particles],
-    'y': y_deformed[valid_particles],
-    'z': z[valid_particles],
-    'mass': mass[valid_particles],
-    'id': particle_ids[valid_particles],
-    'ux': u_x[valid_particles],
-    'uy': u_y[valid_particles]
+    'x': x_deformed[all_deformed_particles],
+    'y': y_deformed[all_deformed_particles],
+    'z': z[all_deformed_particles],
+    'mass': mass[all_deformed_particles],
+    'id': particle_ids[all_deformed_particles],
+    'ux': u_x[all_deformed_particles],
+    'uy': u_y[all_deformed_particles]
 })
 # Save particle data to CSV for rotated particles
 particle_data_deformed.to_csv('particle_data_deformed.csv', index=False)

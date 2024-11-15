@@ -12,7 +12,7 @@ image_size_z = 1   # Set the size of the z-axis
 num_particles = 2000
 
 add_blinking = True
-blinking_num = 20
+blinking_num = 0
 
 if add_blinking :
     not_blinking_ids = [True] * (num_particles - blinking_num) + [False] * blinking_num
@@ -68,7 +68,7 @@ def calculate_displacement_crack(x, y, K_I, mu, kappa):
     return u_x, u_y
 
 def calculate_displacement_linear(x, y, K_I, mu, kappa):  
-    u_x = 4.0 * x / 10.0
+    u_x = 1.0 * x / 10.0
     # u_y = 1.0 * y / 10.0
     u_y = np.zeros_like(u_x)
     

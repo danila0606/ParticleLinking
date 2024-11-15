@@ -26,6 +26,7 @@ class ReliabilityRAFTSolver :
         self.first_ids = first_ids
 
         self.drop_stack = False # True
+        self.predictors_consider = 1
 
     def track_reliability_RAFT(self, id_xyzt):
         # Set optional parameters from kwargs
@@ -110,52 +111,86 @@ class ReliabilityRAFTSolver :
         linked_source_pts[start_id] = dest_id
         linked_dest_pts[dest_id] = start_id
 
-        predict_stack_p = 0
+        cur_stack_p = 0
         while (len(source_pts_stack) < n_pts1) :
-            print(len(source_pts_stack))
-            predict_linked_pt_info = source_pts_stack[predict_stack_p]
-            if (predict_linked_pt_info.dest_id == -2) :
-                predict_stack_p = predict_stack_p - 1
-                if (predict_stack_p < 0) :
+            # print(len(source_pts_stack))
+            last_linked_pt_info = source_pts_stack[cur_stack_p]
+            if (last_linked_pt_info.dest_id == -2) :
+                cur_stack_p = cur_stack_p - 1
+                if (cur_stack_p < 0) :
                     raise ValueError("Can't good predictor, try to change params!")
                 continue
 
-            predict_pt_neighbours = near_neighb_inds_pts1[predict_linked_pt_info.src_id]
+            last_pt_neighbours = near_neighb_inds_pts1[last_linked_pt_info.src_id]
 
             next_src_pt_id = -1
-            for neighbour_id in predict_pt_neighbours :
+            for neighbour_id in last_pt_neighbours :
                 if (linked_source_pts[neighbour_id] == -1) : # or (linked_source_pts[neighbour_id] == -2)
                     next_src_pt_id = neighbour_id
                     break
 
             # if (next_src_pt_id == -1) :
-            #     raise ValueError("Can't find free neighbour for {predict_linked_pt_info[0]}, try to change params!")
+            #     raise ValueError("Can't find free neighbour for {last_linked_pt_info[0]}, try to change params!")
 
             # TODODODODODOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOo
             # Dont raise, because sometime generates far away predict particles which has no free neighbour particles, in this case 
             # take free particles, find close neigbour with dest_id != -2 or -1, take this prediction
             if (next_src_pt_id == -1) :
-                predict_stack_p = predict_stack_p - 1
-                if (predict_stack_p < 0) :
+                cur_stack_p = cur_stack_p - 1
+                if (cur_stack_p < 0) :
                     for i in range(0, linked_source_pts.shape[0]) :
                         if (linked_source_pts[i] == -1) :
                             next_src_pt_id = i
                             dists_tmp = np.sum((pts1 - pts1[next_src_pt_id])**2, axis=1)
                             inds_tmp = np.argsort(dists_tmp)
-                            neighbours_free_pt = inds_tmp[inds_tmp != i]
-                            for k in range (neighbours_free_pt.shape[0]) :
-                                if (linked_source_pts[neighbours_free_pt[k]] >= 0) :
-                                    predict_linked_pt_info = self.LinkInfo(neighbours_free_pt[k], linked_source_pts[neighbours_free_pt[k]], 0, [])
-                                    break
+                            neighbours_free_pt = inds_tmp[inds_tmp != next_src_pt_id]
+                            for neighbour in neighbours_free_pt :
+                                if (linked_source_pts[neighbour] >= 0) :
+                                    if (dists_tmp[neighbour] > self.maxdisp * self.sample_search_range_coef) :
+                                        break
 
                             break
                     if (next_src_pt_id == -1) : # Smth wrong!!!
                         raise ValueError("Can't find next free particle, try to change params!")
                 else :
                     continue
+            else :
+                neighbours_free_pt = near_neighb_inds_pts1[next_src_pt_id]
+
+            predictors_infos = []
+            for neighbour in neighbours_free_pt :
+                if (linked_source_pts[neighbour] >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
+                    for elem in source_pts_stack :
+                        if elem.src_id == neighbour :
+                            predictors_infos.append(elem)
+                            break
+
+            if (len(predictors_infos) == 0) :
+                cur_stack_p = cur_stack_p - 1
+                if (cur_stack_p < 0) : # taking any closest predictor
+                    dists_tmp = np.sum((pts1 - pts1[next_src_pt_id])**2, axis=1)
+                    inds_tmp = np.argsort(dists_tmp)
+                    predictor_ids = inds_tmp[inds_tmp != next_src_pt_id]
+                    for neighbour in predictor_ids :
+                        if (len(predictor_ids) > self.predictors_consider) :
+                            break
+                        if (linked_source_pts[neighbour] >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
+                            for elem in source_pts_stack :
+                                if elem.src_id == neighbour :
+                                    print("Appending")
+                                    predictors_infos.append(elem)
+                                    break
+                else :
+                    continue
             
-        # Find nearby points in pts2 that satisfy displacement constraints
-            prediction_uvz = (pts2[predict_linked_pt_info.dest_id] - pts1[predict_linked_pt_info.src_id])
+            # sort by disp, take the middle one
+            predictors_infos = sorted(predictors_infos, key=lambda x: x.error)[:self.predictors_consider]
+
+            prediction_uvz = np.zeros(self.dim)
+            for p_info in predictors_infos :
+                prediction_uvz = prediction_uvz + (pts2[p_info.dest_id] - pts1[p_info.src_id])
+            prediction_uvz = prediction_uvz / len(predictors_infos)
+            
             # OLD WAY
             inds_near = self.__get_near_inds__(pts1[next_src_pt_id] + prediction_uvz, pts2) # add prediction
             # NEW WAY
@@ -164,15 +199,7 @@ class ReliabilityRAFTSolver :
                 inds_near = np.argsort(dists_tmp)[:self.n_consider + 1]
                 inds_near = inds_near[inds_near != i][:self.n_consider]
             if len(inds_near) > 0:
-                pm = []
-                for j in inds_near:
-                    # Relative positions of nearest neighbours
-                    ri = pts1[near_neighb_inds_pts1[next_src_pt_id]] - pts1[next_src_pt_id]
-                    rj = pts2[near_neighb_inds_pts2[j]] - pts2[j]
-                    # Calculate the squared distance matrix for relative particle points
-                    dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
-                    # Cost is the sum of distances between n_use points
-                    pm.append(np.sum(np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])))
+                pm = pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
 
                 # Find the minimum penalty and corresponding point in pts2
                 dest_id = -1
@@ -216,7 +243,7 @@ class ReliabilityRAFTSolver :
                 if (dest_id != -2) :
                     linked_dest_pts[dest_id] = next_src_pt_id
 
-                predict_stack_p = len(source_pts_stack)
+                cur_stack_p = len(source_pts_stack)
                 source_pts_stack.append(self.LinkInfo(next_src_pt_id, dest_id, penalty, []))
 
             else :
@@ -227,6 +254,22 @@ class ReliabilityRAFTSolver :
             trace.append(np.array(pts1[link_info.src_id][:2]))
 
         return np.column_stack((np.arange(linked_source_pts.shape[0]), linked_source_pts)), trace
+    
+    def __eval_penalties__(self, src_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2):
+        if len(inds_near) == 0 :
+            raise ValueError("Indices array is empty!")
+        
+        pm = []
+        for j in inds_near:
+            # Relative positions of nearest neighbours
+            ri = pts1[near_neighb_inds_pts1[src_id]] - pts1[src_id]
+            rj = pts2[near_neighb_inds_pts2[j]] - pts2[j]
+            # Calculate the squared distance matrix for relative particle points
+            dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
+            # Cost is the sum of distances between n_use points
+            pm.append(np.sum(np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])))
+        
+        return pm
     
     def __get_near_inds__(self, coord, pts, sample_start_point=False) :
         if (sample_start_point) :
@@ -273,16 +316,7 @@ class ReliabilityRAFTSolver :
             inds_near = self.__get_near_inds__(pts1[i], pts2, sample_start_point=True)
 
             if len(inds_near) > 0:
-                pm = []
-                for j in inds_near:
-                    # Relative positions of nearest neighbours
-                    ri = pts1[near_neighb_inds_pts1[i]] - pts1[i]
-                    rj = pts2[near_neighb_inds_pts2[j]] - pts2[j]
-                    # Calculate the squared distance matrix for relative particle points
-                    dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
-                    # Cost is the sum of distances between n_use points
-                    tmp = np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use]
-                    pm.append(np.sum(np.sqrt(tmp)))
+                pm = self.__eval_penalties__(i, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
 
                 # Find the minimum penalty and corresponding point in pts2
                 penalty = min(pm)
@@ -340,8 +374,8 @@ def link_particles_and_compare(static_csv, deformed_csv):
     combined_data = pd.concat([static_data, deformed_data], ignore_index=True)
 
     # Track particles using track_raft function
-    solver = ReliabilityRAFTSolver(3, "SampleRandom", maxdisp=8, sample_ratio=0.03, sample_search_range_coef=1.5, first_ids=[1, 3, 5, 8, 15], \
-                                   n_consider=5, n_use=3)
+    solver = ReliabilityRAFTSolver(3, "SampleRandom", maxdisp=6, sample_ratio=0.03, sample_search_range_coef=1.5, first_ids=[1, 3, 5, 8, 15], \
+                                   n_consider=10, n_use=5)
 
     tracked_data, trace = solver.track_reliability_RAFT(combined_data)
     # save_track_path_to_image(trace, 'trace.png')
@@ -373,5 +407,5 @@ def link_particles_and_compare(static_csv, deformed_csv):
 
 
 # Example usage:
-# link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
-link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv')
+link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
+# link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv')

@@ -26,7 +26,7 @@ class ReliabilityRAFTSolver :
         self.first_ids = first_ids
 
         self.drop_stack = False # True
-        self.predictors_consider = 3
+        self.predictors_consider = 5
 
     def track_reliability_RAFT(self, id_xyzt):
         # Set optional parameters from kwargs
@@ -102,15 +102,18 @@ class ReliabilityRAFTSolver :
         source_pts_stack = []
         linked_source_pts = [self.LinkInfo(-1, float('inf'), []) for i in range(n_pts1)]
         linked_dest_pts = np.full(n_pts2, -1)
+        errors = [-1] * n_pts1
         # source_id, error, banned_dest_ids
         if (dest_id == -1) :
             raise ValueError("Bad sampling, try to change params!")
 
         source_pts_stack.append(start_id)
         linked_source_pts[start_id] = self.LinkInfo(dest_id, error, [])
+        errors[start_id] = error
         linked_dest_pts[dest_id] = start_id
 
         cur_stack_p = 0
+
         while (len(source_pts_stack) < n_pts1) :
             # print(len(source_pts_stack))
             last_linked_src_id = source_pts_stack[cur_stack_p]
@@ -159,7 +162,7 @@ class ReliabilityRAFTSolver :
 
             predictors_infos = []
             for neighbour in neighbours_free_pt :
-                if (linked_source_pts[neighbour].id >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
+                if (linked_source_pts[neighbour].id >= 0) :
                     predictors_infos.append(linked_source_pts[neighbour])
  
 
@@ -172,13 +175,15 @@ class ReliabilityRAFTSolver :
                     for neighbour in predictor_ids :
                         if (len(predictors_infos) > self.predictors_consider) :
                             break
-                        if (linked_source_pts[neighbour].id >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
+                        if (linked_source_pts[neighbour].id >= 0) :
                             predictors_infos.append(linked_source_pts[neighbour])
                 else :
                     continue
             
             # sort by disp, take the middle one!!!!!!
-            predictors_infos = sorted(predictors_infos, key=lambda x: x.error)[:self.predictors_consider]
+            # print("Before: ", len(predictors_infos))
+            predictors_infos = self.__get_reasonable_predictors__(predictors_infos)
+            # print("After: ", len(predictors_infos))
 
             prediction_uvz = np.zeros(self.dim)
             for p_info in predictors_infos :
@@ -223,15 +228,23 @@ class ReliabilityRAFTSolver :
                                 for k in range(stack_id, len(source_pts_stack)) :
                                     src_id_to_drop = source_pts_stack[k]
                                     linked_source_pts[src_id_to_drop] = self.LinkInfo(-1, float('inf'), [])
+                                    errors[src_id_to_drop] = -1
                                     linked_dest_pts[linked_source_pts[src_id_to_drop].id] = -1
 
                                 del source_pts_stack[stack_id : len(source_pts_stack)]
                             else :
                                 linked_source_pts[bad_linked_src_id] = self.LinkInfo(-1, float('inf'), [])
+                                errors[bad_linked_src_id] = -1
                                 del source_pts_stack[stack_id]
+
+                if (self.__is_big_error__(errors, penalty)) :
+                    dest_id = -2
 
                 if (dest_id != -2) :
                     linked_dest_pts[dest_id] = next_src_pt_id
+                    errors[next_src_pt_id] = penalty
+                else :
+                    errors[next_src_pt_id] = -1
 
                 linked_source_pts[next_src_pt_id] = self.LinkInfo(dest_id, penalty, [])
 
@@ -255,6 +268,46 @@ class ReliabilityRAFTSolver :
             
         return -1
     
+    def __is_big_error__(self, errors, error, num_sigma = 4.0, min_errors_to_consider = 10) :
+        if (error < 0) :
+            return True
+
+        filtered_errors = [e for e in errors if e > 0]
+
+        if (len(filtered_errors) < min_errors_to_consider) :
+            return False
+
+        mean_error = np.mean(filtered_errors)
+        std_error = np.std(filtered_errors)
+
+        if (abs(error - mean_error) > num_sigma * std_error) :
+            return True
+        
+        return False
+    
+    def __get_reasonable_predictors__(self, predictors_infos) :
+        if (len(predictors_infos) == 0) :
+            raise ValueError("Predictors list is emply!")
+        
+        predictors_infos = sorted(predictors_infos, key=lambda x: x.error)[:self.predictors_consider]
+        if (len(predictors_infos) < 3) :
+            return [predictors_infos[0]]
+        
+        # return predictors_infos[0:3]
+        return predictors_infos[1:-1]
+    
+    def __remove_outliers__(self, errors, num_sigma = 3) :
+        mean_error = np.mean(errors)
+        std_error = np.std(errors)
+
+        threshold = mean_error + num_sigma * std_error
+
+        outlier_indices = np.where(np.abs(errors - mean_error) > threshold)[0]
+        good_errors = errors
+        good_errors[outlier_indices] = 0
+
+        return good_errors
+    
     def __eval_penalties__(self, src_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2):
         if len(inds_near) == 0 :
             raise ValueError("Indices array is empty!")
@@ -267,7 +320,9 @@ class ReliabilityRAFTSolver :
             # Calculate the squared distance matrix for relative particle points
             dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
             # Cost is the sum of distances between n_use points
-            pm.append(np.sum(np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])))
+            errors = np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])
+            good_errors = self.__remove_outliers__(errors)
+            pm.append(np.sum(good_errors))
         
         return pm
     
@@ -374,8 +429,8 @@ def link_particles_and_compare(static_csv, deformed_csv):
     combined_data = pd.concat([static_data, deformed_data], ignore_index=True)
 
     # Track particles using track_raft function
-    solver = ReliabilityRAFTSolver(3, "SampleRandom", maxdisp=10, sample_ratio=0.03, sample_search_range_coef=2.5, first_ids=[1, 3, 5, 8, 15], \
-                                   n_consider=10, n_use=6)
+    solver = ReliabilityRAFTSolver(3, "SampleRandom", maxdisp=15, sample_ratio=0.03, sample_search_range_coef=2.5, first_ids=[1, 3, 5, 8, 15], \
+                                   n_consider=16, n_use=10)
 
     tracked_data, trace = solver.track_reliability_RAFT(combined_data)
     # save_track_path_to_image(trace, 'trace.png')

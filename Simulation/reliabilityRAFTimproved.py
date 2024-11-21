@@ -26,7 +26,7 @@ class ReliabilityRAFTSolver :
         self.first_ids = first_ids
 
         self.drop_stack = False # True
-        self.predictors_consider = 1
+        self.predictors_consider = 3
 
     def track_reliability_RAFT(self, id_xyzt):
         # Set optional parameters from kwargs
@@ -70,9 +70,8 @@ class ReliabilityRAFTSolver :
         return pd.concat([id_xyzt[['id']], df], axis = 1), trace
     
     class LinkInfo :
-        def __init__(self, src_id, dest_id, error, banned_dest_ids):
-            self.src_id = src_id
-            self.dest_id = dest_id
+        def __init__(self, id, error, banned_dest_ids):
+            self.id = id
             self.error = error
             self.banned_dest_ids = banned_dest_ids
 
@@ -101,31 +100,32 @@ class ReliabilityRAFTSolver :
         print("Sampling done! ", start_id, dest_id, error)
 
         source_pts_stack = []
+        linked_source_pts = [self.LinkInfo(-1, float('inf'), []) for i in range(n_pts1)]
+        linked_dest_pts = np.full(n_pts2, -1)
         # source_id, error, banned_dest_ids
-        source_pts_stack.append(self.LinkInfo(start_id, dest_id, error, []))
         if (dest_id == -1) :
             raise ValueError("Bad sampling, try to change params!")
-        linked_source_pts = np.full(n_pts1, -1)
-        linked_dest_pts = np.full(n_pts2, -1)
-        
-        linked_source_pts[start_id] = dest_id
+
+        source_pts_stack.append(start_id)
+        linked_source_pts[start_id] = self.LinkInfo(dest_id, error, [])
         linked_dest_pts[dest_id] = start_id
 
         cur_stack_p = 0
         while (len(source_pts_stack) < n_pts1) :
             # print(len(source_pts_stack))
-            last_linked_pt_info = source_pts_stack[cur_stack_p]
-            if (last_linked_pt_info.dest_id == -2) :
+            last_linked_src_id = source_pts_stack[cur_stack_p]
+            last_linked_pt_info = linked_source_pts[last_linked_src_id]
+            if (last_linked_pt_info.id == -2) :
                 cur_stack_p = cur_stack_p - 1
                 if (cur_stack_p < 0) :
                     raise ValueError("Can't good predictor, try to change params!")
                 continue
 
-            last_pt_neighbours = near_neighb_inds_pts1[last_linked_pt_info.src_id]
+            last_pt_neighbours = near_neighb_inds_pts1[last_linked_src_id]
 
             next_src_pt_id = -1
             for neighbour_id in last_pt_neighbours :
-                if (linked_source_pts[neighbour_id] == -1) : # or (linked_source_pts[neighbour_id] == -2)
+                if (linked_source_pts[neighbour_id].id == -1) : # or (linked_source_pts[neighbour_id] == -2)
                     next_src_pt_id = neighbour_id
                     break
 
@@ -138,14 +138,14 @@ class ReliabilityRAFTSolver :
             if (next_src_pt_id == -1) :
                 cur_stack_p = cur_stack_p - 1
                 if (cur_stack_p < 0) :
-                    for i in range(0, linked_source_pts.shape[0]) :
-                        if (linked_source_pts[i] == -1) :
+                    for i in range(0, len(linked_source_pts)) :
+                        if (linked_source_pts[i].id == -1) :
                             next_src_pt_id = i
                             dists_tmp = np.sum((pts1 - pts1[next_src_pt_id])**2, axis=1)
                             inds_tmp = np.argsort(dists_tmp)
                             neighbours_free_pt = inds_tmp[inds_tmp != next_src_pt_id]
                             for neighbour in neighbours_free_pt :
-                                if (linked_source_pts[neighbour] >= 0) :
+                                if (linked_source_pts[neighbour].id >= 0) :
                                     if (dists_tmp[neighbour] > self.maxdisp * self.sample_search_range_coef) :
                                         break
 
@@ -159,11 +159,9 @@ class ReliabilityRAFTSolver :
 
             predictors_infos = []
             for neighbour in neighbours_free_pt :
-                if (linked_source_pts[neighbour] >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
-                    for elem in source_pts_stack :
-                        if elem.src_id == neighbour :
-                            predictors_infos.append(elem)
-                            break
+                if (linked_source_pts[neighbour].id >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
+                    predictors_infos.append(linked_source_pts[neighbour])
+ 
 
             if (len(predictors_infos) == 0) :
                 cur_stack_p = cur_stack_p - 1
@@ -172,23 +170,19 @@ class ReliabilityRAFTSolver :
                     inds_tmp = np.argsort(dists_tmp)
                     predictor_ids = inds_tmp[inds_tmp != next_src_pt_id]
                     for neighbour in predictor_ids :
-                        if (len(predictor_ids) > self.predictors_consider) :
+                        if (len(predictors_infos) > self.predictors_consider) :
                             break
-                        if (linked_source_pts[neighbour] >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
-                            for elem in source_pts_stack :
-                                if elem.src_id == neighbour :
-                                    print("Appending")
-                                    predictors_infos.append(elem)
-                                    break
+                        if (linked_source_pts[neighbour].id >= 0) : # TODO ADD pointer do stack elements!!!!!!!!
+                            predictors_infos.append(linked_source_pts[neighbour])
                 else :
                     continue
             
-            # sort by disp, take the middle one
+            # sort by disp, take the middle one!!!!!!
             predictors_infos = sorted(predictors_infos, key=lambda x: x.error)[:self.predictors_consider]
 
             prediction_uvz = np.zeros(self.dim)
             for p_info in predictors_infos :
-                prediction_uvz = prediction_uvz + (pts2[p_info.dest_id] - pts1[p_info.src_id])
+                prediction_uvz = prediction_uvz + (pts2[p_info.id] - pts1[linked_dest_pts[p_info.id]])
             prediction_uvz = prediction_uvz / len(predictors_infos)
             
             # OLD WAY
@@ -212,13 +206,9 @@ class ReliabilityRAFTSolver :
                         break
                     else :
                         bad_linked_src_id = linked_dest_pts[ind_nn2]
-                        for link_info_id in range(0, len(source_pts_stack)) :# add pointer in linked_source_pts
-                            link_info = source_pts_stack[link_info_id]
-                            if (link_info.src_id == bad_linked_src_id) :
-                                error = link_info.error
-                                break
+                        link_info = linked_source_pts[bad_linked_src_id]
                         
-                        if (error <= penalty) :
+                        if (link_info.error <= penalty) :
                             np.delete(inds_near, np.argmin(pm))
                             del pm[np.argmin(pm)]
                             if (len(pm) == 0) :
@@ -228,32 +218,42 @@ class ReliabilityRAFTSolver :
                             continue
                         else :
                             dest_id = ind_nn2
+                            stack_id = self.__find_src_in_stack__(source_pts_stack, bad_linked_src_id)
                             if (self.drop_stack) :
-                                for k in range(link_info_id, len(source_pts_stack)) :
-                                    linked_source_pts[source_pts_stack[k].src_id] = -1
-                                    linked_dest_pts[source_pts_stack[k].dest_id] = -1
+                                for k in range(stack_id, len(source_pts_stack)) :
+                                    src_id_to_drop = source_pts_stack[k]
+                                    linked_source_pts[src_id_to_drop] = self.LinkInfo(-1, float('inf'), [])
+                                    linked_dest_pts[linked_source_pts[src_id_to_drop].id] = -1
 
-                                del source_pts_stack[link_info_id : len(source_pts_stack)]
+                                del source_pts_stack[stack_id : len(source_pts_stack)]
                             else :
-                                linked_source_pts[bad_linked_src_id] = -1
-                                del source_pts_stack[link_info_id]
+                                linked_source_pts[bad_linked_src_id] = self.LinkInfo(-1, float('inf'), [])
+                                del source_pts_stack[stack_id]
 
-
-                linked_source_pts[next_src_pt_id] = dest_id
                 if (dest_id != -2) :
                     linked_dest_pts[dest_id] = next_src_pt_id
 
+                linked_source_pts[next_src_pt_id] = self.LinkInfo(dest_id, penalty, [])
+
                 cur_stack_p = len(source_pts_stack)
-                source_pts_stack.append(self.LinkInfo(next_src_pt_id, dest_id, penalty, []))
+                source_pts_stack.append(next_src_pt_id)
 
             else :
                 raise ValueError("Can't find neighbours for the particle, try to change params!")
 
         trace = []
-        for link_info in source_pts_stack :
-            trace.append(np.array(pts1[link_info.src_id][:2]))
+        for src_id in source_pts_stack :
+            trace.append(np.array(pts1[src_id][:2]))
 
-        return np.column_stack((np.arange(linked_source_pts.shape[0]), linked_source_pts)), trace
+        links_arr = np.array([info.id for info in linked_source_pts])
+        return np.column_stack((np.arange(len(linked_source_pts)), links_arr)), trace
+    
+    def __find_src_in_stack__(self, infos_stack, src_id) :
+        for k in range(0, len(infos_stack)) :
+            if infos_stack[k] == src_id :
+                return k
+            
+        return -1
     
     def __eval_penalties__(self, src_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2):
         if len(inds_near) == 0 :
@@ -374,8 +374,8 @@ def link_particles_and_compare(static_csv, deformed_csv):
     combined_data = pd.concat([static_data, deformed_data], ignore_index=True)
 
     # Track particles using track_raft function
-    solver = ReliabilityRAFTSolver(3, "SampleRandom", maxdisp=6, sample_ratio=0.03, sample_search_range_coef=1.5, first_ids=[1, 3, 5, 8, 15], \
-                                   n_consider=10, n_use=5)
+    solver = ReliabilityRAFTSolver(3, "SampleRandom", maxdisp=10, sample_ratio=0.03, sample_search_range_coef=2.5, first_ids=[1, 3, 5, 8, 15], \
+                                   n_consider=10, n_use=6)
 
     tracked_data, trace = solver.track_reliability_RAFT(combined_data)
     # save_track_path_to_image(trace, 'trace.png')

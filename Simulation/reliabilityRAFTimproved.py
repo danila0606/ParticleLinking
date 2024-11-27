@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 class ReliabilityRAFTSolver :
     def __init__(self, dim, init_prediction_method, maxdisp, sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = [], **kwargs) :
-        if (init_prediction_method != "SampleRandom" and init_prediction_method != "UseProvided") :
+        if (init_prediction_method != 'SampleRandom' and init_prediction_method != 'UseProvided') :
             raise Exception("There is not prediction method with name " + init_prediction_method)
         
         self.init_prediction_method = init_prediction_method
@@ -94,7 +94,6 @@ class ReliabilityRAFTSolver :
             inds = np.argsort(dists)[:self.n_consider + 1]
             near_neighb_inds_pts2[i] = inds[inds != i][:self.n_consider]
 
-
         #Sampling
         start_id, dest_id, error = self.__sample_start_point__(pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
         print("Sampling done! ", start_id, dest_id, error)
@@ -103,7 +102,6 @@ class ReliabilityRAFTSolver :
         linked_source_pts = [self.LinkInfo(-1, float('inf'), []) for i in range(n_pts1)]
         linked_dest_pts = np.full(n_pts2, -1)
         errors = [-1] * n_pts1
-        # source_id, error, banned_dest_ids
         if (dest_id == -1) :
             raise ValueError("Bad sampling, try to change params!")
 
@@ -115,7 +113,6 @@ class ReliabilityRAFTSolver :
         cur_stack_p = 0
 
         while (len(source_pts_stack) < n_pts1) :
-            # print(len(source_pts_stack))
             last_linked_src_id = source_pts_stack[cur_stack_p]
             last_linked_pt_info = linked_source_pts[last_linked_src_id]
             if (last_linked_pt_info.id == -2) :
@@ -128,16 +125,10 @@ class ReliabilityRAFTSolver :
 
             next_src_pt_id = -1
             for neighbour_id in last_pt_neighbours :
-                if (linked_source_pts[neighbour_id].id == -1) : # or (linked_source_pts[neighbour_id] == -2)
+                if (linked_source_pts[neighbour_id].id == -1) :
                     next_src_pt_id = neighbour_id
                     break
 
-            # if (next_src_pt_id == -1) :
-            #     raise ValueError("Can't find free neighbour for {last_linked_pt_info[0]}, try to change params!")
-
-            # TODODODODODOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOo
-            # Dont raise, because sometime generates far away predict particles which has no free neighbour particles, in this case 
-            # take free particles, find close neigbour with dest_id != -2 or -1, take this prediction
             if (next_src_pt_id == -1) :
                 cur_stack_p = cur_stack_p - 1
                 if (cur_stack_p < 0) :
@@ -180,27 +171,21 @@ class ReliabilityRAFTSolver :
                 else :
                     continue
             
-            # sort by disp, take the middle one!!!!!!
-            # print("Before: ", len(predictors_infos))
+            # sort by disp, take the middle one
             predictors_infos = self.__get_reasonable_predictors__(predictors_infos)
-            # print("After: ", len(predictors_infos))
 
             prediction_uvz = np.zeros(self.dim)
             for p_info in predictors_infos :
                 prediction_uvz = prediction_uvz + (pts2[p_info.id] - pts1[linked_dest_pts[p_info.id]])
             prediction_uvz = prediction_uvz / len(predictors_infos)
             
-            # OLD WAY
             inds_near = self.__get_near_inds__(pts1[next_src_pt_id] + prediction_uvz, pts2) # add prediction
-            # NEW WAY
             if (len(inds_near) == 0) :
                 dists_tmp = np.sum((pts2 - (pts1[next_src_pt_id] + prediction_uvz))**2, axis=1)
                 inds_near = np.argsort(dists_tmp)[:self.n_consider + 1]
                 inds_near = inds_near[inds_near != i][:self.n_consider]
             if len(inds_near) > 0:
                 pm = pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-
-                # Find the minimum penalty and corresponding point in pts2
                 dest_id = -1
 
                 while(dest_id == -1) :
@@ -219,7 +204,6 @@ class ReliabilityRAFTSolver :
                             if (len(pm) == 0) :
                                 dest_id = -2
                                 break
-                                # raise ValueError("Can't find good destination candidates for the particle, try to change params!")
                             continue
                         else :
                             dest_id = ind_nn2
@@ -268,7 +252,7 @@ class ReliabilityRAFTSolver :
             
         return -1
     
-    def __is_big_error__(self, errors, error, num_sigma = 4.0, min_errors_to_consider = 10) :
+    def __is_big_error__(self, errors, error, num_sigma = 3.0, min_errors_to_consider = 10) :
         if (error < 0) :
             return True
 
@@ -308,21 +292,28 @@ class ReliabilityRAFTSolver :
 
         return good_errors
     
+    # L2 error
+    def __eval_penalty__(self, src_id, dst_id, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2) :
+        ri = pts1[near_neighb_inds_pts1[src_id]] - pts1[src_id]
+        rj = pts2[near_neighb_inds_pts2[dst_id]] - pts2[dst_id]
+
+        # Calculate the squared distance matrix for relative particle points
+        dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
+
+        # Cost is the sum of distances between n_use points
+        errors = np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])
+        good_errors = self.__remove_outliers__(errors)
+
+        return np.sum(good_errors)
+    
     def __eval_penalties__(self, src_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2):
         if len(inds_near) == 0 :
             raise ValueError("Indices array is empty!")
         
         pm = []
         for j in inds_near:
-            # Relative positions of nearest neighbours
-            ri = pts1[near_neighb_inds_pts1[src_id]] - pts1[src_id]
-            rj = pts2[near_neighb_inds_pts2[j]] - pts2[j]
-            # Calculate the squared distance matrix for relative particle points
-            dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
-            # Cost is the sum of distances between n_use points
-            errors = np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])
-            good_errors = self.__remove_outliers__(errors)
-            pm.append(np.sum(good_errors))
+            error = self.__eval_penalty__(src_id, j, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
+            pm.append(error)
         
         return pm
     
@@ -358,12 +349,15 @@ class ReliabilityRAFTSolver :
         n_pts1 = pts1.shape[0]
         n_pts2 = pts2.shape[0]
 
-        if (self.init_prediction_method == "SampleRandom") :
-            tries = int(self.sample_ratio * n_pts1)
-            random.seed(0)
-            sample_candidates = random.sample(range(0, n_pts1), tries)
-        else :
-            sample_candidates = self.first_ids
+        if (self.init_prediction_method == 'UseProvided') :
+            error  = self.__eval_penalty__(self.first_ids[0], self.first_ids[1], pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
+            return self.first_ids[0], self.first_ids[1], error
+
+        # Random Sampling
+
+        tries = int(self.sample_ratio * n_pts1)
+        random.seed(0)
+        sample_candidates = random.sample(range(0, n_pts1), tries)
 
         errors = []
         dest_ids = []
@@ -415,8 +409,59 @@ def save_track_path_to_image(trace, image_path) :
     plt.savefig(image_path, bbox_inches='tight')
     plt.close()
 
+def choose_start_GUI(data1, data2) :
+    x_shift = max(data1['x'].max(), data2['x'].max()) * 1.5
+    # data2['x'] += x_shift
 
-def link_particles_and_compare(static_csv, deformed_csv):
+    selected_particles = [-1, -1]
+
+    def on_click_left(event):
+        if event.inaxes is not None:
+            x, y = event.xdata, event.ydata
+            distances = ((data1['x'] - x) ** 2 + (data1['y'] - y) ** 2).pow(0.5)
+            selected_particles[0] = distances.idxmin()
+            print(f"Selected particle from t=0: ID={selected_particles[0]}")
+
+    def on_click_right(event):
+        if event.inaxes is not None:
+            x, y = event.xdata, event.ydata
+            distances = ((data2['x'] - x) ** 2 + (data2['y'] - y) ** 2).pow(0.5)
+            selected_particles[1] = distances.idxmin()
+            print(f"Selected particle from t=1: ID={selected_particles[1]}")
+
+    def on_key(event):
+        if event.key == "enter":
+            plt.close("all")
+            print("Selected Particles:")
+            print(f"t=0 Particle ID: {selected_particles[0]}")
+            print(f"t=1 Particle ID: {selected_particles[1]}")
+
+    fig1, ax1 = plt.subplots(figsize=(8, 6))
+    ax1.scatter(data1['x'], data1['y'], color='blue', label='File 1 Particles', zorder=2, s=2)
+    ax1.set_title('Particles from time 0 (Left)')
+    ax1.set_xlabel('X Coordinate')
+    ax1.set_ylabel('Y Coordinate')
+    ax1.legend()
+    ax1.grid(True)
+    fig1.canvas.mpl_connect('button_press_event', on_click_left)
+
+    fig2, ax2 = plt.subplots(figsize=(8, 6))
+    ax2.scatter(data2['x'], data2['y'], color='red', label='File 2 Particles', zorder=2, s=2)
+    ax2.set_title('Particles from time 1 (Right)')
+    ax2.set_xlabel('X Coordinate')
+    ax2.set_ylabel('Y Coordinate')
+    ax2.legend()
+    ax2.grid(True)
+    fig2.canvas.mpl_connect('button_press_event', on_click_right)
+
+    fig1.canvas.mpl_connect('key_press_event', on_key)
+    fig2.canvas.mpl_connect('key_press_event', on_key)
+    plt.show()
+
+    return selected_particles
+
+
+def link_particles_and_compare(static_csv, deformed_csv, sample_random = False):
     # Load the static and deformed particle data from CSV files
     static_data = pd.read_csv(static_csv)
     deformed_data = pd.read_csv(deformed_csv)
@@ -428,8 +473,16 @@ def link_particles_and_compare(static_csv, deformed_csv):
     # Concatenate static and deformed data
     combined_data = pd.concat([static_data, deformed_data], ignore_index=True)
 
+    # TODO: GUI choose of start src_id
+    if not sample_random :
+        method = 'UseProvided'
+        first_ids = choose_start_GUI(static_data, deformed_data)
+    else :
+        method = 'SampleRandom'
+        first_ids = []
+
     # Track particles using track_raft function
-    solver = ReliabilityRAFTSolver(3, "SampleRandom", maxdisp=15, sample_ratio=0.03, sample_search_range_coef=2.5, first_ids=[1, 3, 5, 8, 15], \
+    solver = ReliabilityRAFTSolver(3, method, maxdisp=15, sample_ratio=0.03, sample_search_range_coef=2.5, first_ids=first_ids, \
                                    n_consider=16, n_use=10)
 
     tracked_data, trace = solver.track_reliability_RAFT(combined_data)
@@ -462,5 +515,6 @@ def link_particles_and_compare(static_csv, deformed_csv):
 
 
 # Example usage:
+# link_particles_and_compare('hard_real_particle_static.csv', 'hard_real_particle_deformed.csv')
 link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
 # link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv')

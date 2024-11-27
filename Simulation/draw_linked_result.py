@@ -2,8 +2,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the data from the CSV files
+# static_particles = pd.read_csv('hard_real_particle_static.csv')
+# deformed_particles = pd.read_csv('hard_real_particle_deformed.csv')
+
 static_particles = pd.read_csv('real_particle_static.csv')
 deformed_particles = pd.read_csv('real_particle_deformed.csv')
+
 # static_particles = pd.read_csv('particle_data_static.csv')
 # deformed_particles = pd.read_csv('particle_data_deformed.csv')
 
@@ -19,7 +23,7 @@ assert 'correct_link' in connections.columns, "Connections CSV must have a 'bool
 plt.figure(figsize=(10, 8))
 
 # Plot static particles
-plt.scatter(static_particles['x'], static_particles['y'], color='blue', label='Static Particles', zorder=2, s=1)
+plt.scatter(static_particles['x'], static_particles['y'], color='blue', label='Static Particles', zorder=2, s=2)
 
 # Plot deformed particles
 plt.scatter(deformed_particles['x'], deformed_particles['y'], color='red', label='Deformed Particles', zorder=2, s=2)

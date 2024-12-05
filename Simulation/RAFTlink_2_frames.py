@@ -2,13 +2,16 @@ import numpy as np
 import pandas as pd
 import random
 import matplotlib.pyplot as plt
-# from tqdm import tqdm
-
 
 class ReliabilityRAFTSolver :
-    def __init__(self, dim, init_prediction_method, maxdisp, sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = [], **kwargs) :
-        if (init_prediction_method != 'SampleRandom' and init_prediction_method != 'UseProvided') :
-            raise Exception("There is not prediction method with name " + init_prediction_method)
+    class LinkInfo:
+        def __init__(self, id=-1, error=float('inf')):
+            self.id = id
+            self.error = error
+
+    def __init__(self, dim, init_prediction_method, maxdisp, sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, **kwargs) :
+        if init_prediction_method not in ['SampleRandom', 'UseProvided']:
+            raise ValueError(f"Invalid prediction method: {init_prediction_method}")
         
         self.init_prediction_method = init_prediction_method
         self.sample_search_range_coef = sample_search_range_coef
@@ -68,254 +71,185 @@ class ReliabilityRAFTSolver :
         df['particle'] = df['particle'].astype(int)
 
         return pd.concat([id_xyzt[['id']], df], axis = 1), trace
-    
-    class LinkInfo :
-        def __init__(self, id, error, banned_dest_ids):
-            self.id = id
-            self.error = error
-            self.banned_dest_ids = banned_dest_ids
 
+    def __find_nearest_neighbors__(self, pts, n_neighbors):
+        dists = np.sum((pts[:, np.newaxis] - pts[np.newaxis, :])**2, axis=2)
+        np.fill_diagonal(dists, np.inf)
+        return np.argsort(dists, axis=1)[:, :n_neighbors]
+    
+    def __find_unlinked_source__(self, linked_source, pts1):
+        for i, link in enumerate(linked_source):
+            if link.id == -1:
+                dists = np.sum((pts1 - pts1[i])**2, axis=1)
+                neighbors = np.argsort(dists)
+                for neighbor in neighbors:
+                    if linked_source[neighbor].id >= 0 and dists[neighbor] > self.maxdisp * self.sample_search_range_coef:
+                        return i
+        return -1
+    
+    def __find_close_predictors__(self, linked_source, pts1, src_id, predictors_consider) :
+        inds_tmp = np.argsort(np.sum((pts1 - pts1[src_id])**2, axis=1))
+        predictor_ids = inds_tmp[inds_tmp != src_id]
+        predictors_infos = []
+        for neighbour in predictor_ids :
+            if (len(predictors_infos) > self.predictors_consider) :
+                break
+            if (linked_source[neighbour].id >= 0) :
+                predictors_infos.append(linked_source[neighbour])
+
+        return predictors_infos
 
     def __reliability_flow_tracker__(self, pts1, pts2):
-        n_pts1 = pts1.shape[0]
-        n_pts2 = pts2.shape[0]
+        n_pts1, n_pts2 = pts1.shape[0], pts2.shape[0]
 
         # Find the nearest n_consider neighbours for pts1 and pts2
-        near_neighb_inds_pts1 = np.zeros((n_pts1, self.n_consider), dtype=int)
-        near_neighb_inds_pts2 = np.zeros((n_pts2, self.n_consider), dtype=int)
-
-        for i in range(n_pts1):
-            dists = np.sum((pts1 - pts1[i])**2, axis=1)
-            inds = np.argsort(dists)[:self.n_consider + 1]
-            near_neighb_inds_pts1[i] = inds[inds != i][:self.n_consider]
-
-        for i in range(n_pts2):
-            dists = np.sum((pts2 - pts2[i])**2, axis=1)
-            inds = np.argsort(dists)[:self.n_consider + 1]
-            near_neighb_inds_pts2[i] = inds[inds != i][:self.n_consider]
+        near_neighb_inds_pts1 = self.__find_nearest_neighbors__(pts1, self.n_consider)
+        near_neighb_inds_pts2 = self.__find_nearest_neighbors__(pts2, self.n_consider)
 
         #Sampling
         start_id, dest_id, error = self.__sample_start_point__(pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-        print("Sampling done! ", start_id, dest_id, error)
-
-        source_pts_stack = []
-        linked_source_pts = [self.LinkInfo(-1, float('inf'), []) for i in range(n_pts1)]
-        linked_dest_pts = np.full(n_pts2, -1)
-        errors = [-1] * n_pts1
-        if (dest_id == -1) :
+        if dest_id == -1:
             raise ValueError("Bad sampling, try to change params!")
 
-        source_pts_stack.append(start_id)
-        linked_source_pts[start_id] = self.LinkInfo(dest_id, error, [])
+        linked_source_pts = [self.LinkInfo() for _ in range(n_pts1)]
+        linked_dest_pts = np.full(n_pts2, -1, dtype=int)
+        errors = np.full(n_pts1, -1.0)
+
+        linked_source_pts[start_id] = self.LinkInfo(dest_id, error)
         errors[start_id] = error
         linked_dest_pts[dest_id] = start_id
 
+        source_pts_stack = [start_id]
         cur_stack_p = 0
 
-        while (len(source_pts_stack) < n_pts1) :
-            last_linked_src_id = source_pts_stack[cur_stack_p]
-            last_linked_pt_info = linked_source_pts[last_linked_src_id]
+        while len(source_pts_stack) < n_pts1 :
+            src_id = source_pts_stack[cur_stack_p]
+            last_linked_pt_info = linked_source_pts[src_id]
             if (last_linked_pt_info.id == -2) :
-                cur_stack_p = cur_stack_p - 1
+                cur_stack_p -= 1
                 if (cur_stack_p < 0) :
                     raise ValueError("Can't good predictor, try to change params!")
                 continue
 
-            last_pt_neighbours = near_neighb_inds_pts1[last_linked_src_id]
+            last_pt_neighbours = near_neighb_inds_pts1[src_id]
+            next_src_pt_id = next((n for n in last_pt_neighbours if linked_source_pts[n].id == -1), -1)
 
-            next_src_pt_id = -1
-            for neighbour_id in last_pt_neighbours :
-                if (linked_source_pts[neighbour_id].id == -1) :
-                    next_src_pt_id = neighbour_id
-                    break
-
-            if (next_src_pt_id == -1) :
-                cur_stack_p = cur_stack_p - 1
-                if (cur_stack_p < 0) :
-                    for i in range(0, len(linked_source_pts)) :
-                        if (linked_source_pts[i].id == -1) :
-                            next_src_pt_id = i
-                            dists_tmp = np.sum((pts1 - pts1[next_src_pt_id])**2, axis=1)
-                            inds_tmp = np.argsort(dists_tmp)
-                            neighbours_free_pt = inds_tmp[inds_tmp != next_src_pt_id]
-                            for neighbour in neighbours_free_pt :
-                                if (linked_source_pts[neighbour].id >= 0) :
-                                    if (dists_tmp[neighbour] > self.maxdisp * self.sample_search_range_coef) :
-                                        break
-
-                            break
+            if next_src_pt_id == -1 :
+                cur_stack_p -= 1
+                if cur_stack_p < 0 :
+                    next_src_pt_id = self.__find_unlinked_source__(linked_source_pts, pts1)
                     if (next_src_pt_id == -1) : # Smth wrong!!!
                         raise ValueError("Can't find next free particle, try to change params!")
                 else :
                     continue
-            else :
-                neighbours_free_pt = near_neighb_inds_pts1[next_src_pt_id]
-
-            predictors_infos = []
-            for neighbour in neighbours_free_pt :
-                if (linked_source_pts[neighbour].id >= 0) :
-                    predictors_infos.append(linked_source_pts[neighbour])
- 
+            
+            predictors_infos = [linked_source_pts[n] for n in near_neighb_inds_pts1[next_src_pt_id] if linked_source_pts[n].id >= 0]
 
             if (len(predictors_infos) == 0) :
-                cur_stack_p = cur_stack_p - 1
+                cur_stack_p -= 1
                 if (cur_stack_p < 0) : # taking any closest predictor
-                    dists_tmp = np.sum((pts1 - pts1[next_src_pt_id])**2, axis=1)
-                    inds_tmp = np.argsort(dists_tmp)
-                    predictor_ids = inds_tmp[inds_tmp != next_src_pt_id]
-                    for neighbour in predictor_ids :
-                        if (len(predictors_infos) > self.predictors_consider) :
-                            break
-                        if (linked_source_pts[neighbour].id >= 0) :
-                            predictors_infos.append(linked_source_pts[neighbour])
+                    predictors_infos = self.__find_close_predictors__(linked_source_pts, pts1, next_src_pt_id, self.predictors_consider)
                 else :
                     continue
             
             # sort by disp, take the middle one
             predictors_infos = self.__get_reasonable_predictors__(predictors_infos)
-
-            prediction_uvz = np.zeros(self.dim)
-            for p_info in predictors_infos :
-                prediction_uvz = prediction_uvz + (pts2[p_info.id] - pts1[linked_dest_pts[p_info.id]])
-            prediction_uvz = prediction_uvz / len(predictors_infos)
+            prediction = np.mean([pts2[p.id] - pts1[linked_dest_pts[p.id]] for p in predictors_infos], axis=0)
             
-            inds_near = self.__get_near_inds__(pts1[next_src_pt_id] + prediction_uvz, pts2) # add prediction
-            if (len(inds_near) == 0) :
-                dists_tmp = np.sum((pts2 - (pts1[next_src_pt_id] + prediction_uvz))**2, axis=1)
-                inds_near = np.argsort(dists_tmp)[:self.n_consider + 1]
-                inds_near = inds_near[inds_near != i][:self.n_consider]
-            if len(inds_near) > 0:
-                pm = pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-                dest_id = -1
-
-                while(dest_id == -1) :
-                    penalty = min(pm)
-                    ind_nn2 = inds_near[np.argmin(pm)]
-                    if (linked_dest_pts[ind_nn2] == -1) :
-                        dest_id = ind_nn2
-                        break
-                    else :
-                        bad_linked_src_id = linked_dest_pts[ind_nn2]
-                        link_info = linked_source_pts[bad_linked_src_id]
-                        
-                        if (link_info.error <= penalty) :
-                            np.delete(inds_near, np.argmin(pm))
-                            del pm[np.argmin(pm)]
-                            if (len(pm) == 0) :
-                                dest_id = -2
-                                break
-                            continue
-                        else :
-                            dest_id = ind_nn2
-                            stack_id = self.__find_src_in_stack__(source_pts_stack, bad_linked_src_id)
-                            if (self.drop_stack) :
-                                for k in range(stack_id, len(source_pts_stack)) :
-                                    src_id_to_drop = source_pts_stack[k]
-                                    linked_source_pts[src_id_to_drop] = self.LinkInfo(-1, float('inf'), [])
-                                    errors[src_id_to_drop] = -1
-                                    linked_dest_pts[linked_source_pts[src_id_to_drop].id] = -1
-
-                                del source_pts_stack[stack_id : len(source_pts_stack)]
-                            else :
-                                linked_source_pts[bad_linked_src_id] = self.LinkInfo(-1, float('inf'), [])
-                                errors[bad_linked_src_id] = -1
-                                del source_pts_stack[stack_id]
-
-                if (self.__is_big_error__(errors, penalty)) :
-                    dest_id = -2
-
-                if (dest_id != -2) :
-                    linked_dest_pts[dest_id] = next_src_pt_id
-                    errors[next_src_pt_id] = penalty
-                else :
-                    errors[next_src_pt_id] = -1
-
-                linked_source_pts[next_src_pt_id] = self.LinkInfo(dest_id, penalty, [])
-
-                cur_stack_p = len(source_pts_stack)
-                source_pts_stack.append(next_src_pt_id)
-
-            else :
+            inds_near = self.__get_near_inds__(pts1[next_src_pt_id] + prediction, pts2) # add prediction
+            if inds_near.size == 0 :
+                inds_near = np.argsort(np.sum((pts2 - (pts1[next_src_pt_id] + prediction))**2, axis=1))[:self.n_consider]
+                inds_near = inds_near[inds_near != next_src_pt_id]
+            
+            if inds_near.size == 0 :
                 raise ValueError("Can't find neighbours for the particle, try to change params!")
+            
+            pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
+            dest_id = -1
+            
+            while(dest_id == -1) :
+                penalty = min(pm)
+                min_idx = inds_near[np.argmin(pm)]
 
-        trace = []
-        for src_id in source_pts_stack :
-            trace.append(np.array(pts1[src_id][:2]))
+                if (linked_dest_pts[min_idx] == -1) :
+                    dest_id = min_idx
+                    break
+                else :
+                    bad_linked_src_id = linked_dest_pts[min_idx]
+                    
+                    if (linked_source_pts[bad_linked_src_id].error <= penalty) :
+                        np.delete(inds_near, np.argmin(pm))
+                        del pm[np.argmin(pm)]
+                        if (len(pm) == 0) :
+                            dest_id = -2
+                            break
+                    else :
+                        dest_id = min_idx
+                        stack_id = next((n for n in range(0, len(source_pts_stack)) if source_pts_stack[n] == bad_linked_src_id), -1)
+                        linked_source_pts[bad_linked_src_id] = self.LinkInfo()
+                        errors[bad_linked_src_id] = -1
+                        del source_pts_stack[stack_id]
+
+            if (self.__is_big_error__(errors, penalty)) :
+                dest_id = -2
+
+            if (dest_id != -2) :
+                linked_dest_pts[dest_id] = next_src_pt_id
+                errors[next_src_pt_id] = penalty
+            else :
+                errors[next_src_pt_id] = -1
+
+            linked_source_pts[next_src_pt_id] = self.LinkInfo(dest_id, penalty)
+
+            cur_stack_p = len(source_pts_stack)
+            source_pts_stack.append(next_src_pt_id)
+
+
+        trace = [pts1[src_id, :2] for src_id in source_pts_stack]
 
         links_arr = np.array([info.id for info in linked_source_pts])
         return np.column_stack((np.arange(len(linked_source_pts)), links_arr)), trace
-    
-    def __find_src_in_stack__(self, infos_stack, src_id) :
-        for k in range(0, len(infos_stack)) :
-            if infos_stack[k] == src_id :
-                return k
-            
-        return -1
     
     def __is_big_error__(self, errors, error, num_sigma = 3.0, min_errors_to_consider = 10) :
         if (error < 0) :
             return True
 
-        filtered_errors = [e for e in errors if e > 0]
-
-        if (len(filtered_errors) < min_errors_to_consider) :
+        valid_errors = errors[errors > 0]
+        if len(valid_errors) < min_errors_to_consider:
             return False
 
-        mean_error = np.mean(filtered_errors)
-        std_error = np.std(filtered_errors)
-
-        if (abs(error - mean_error) > num_sigma * std_error) :
-            return True
-        
-        return False
+        mean, std = valid_errors.mean(), valid_errors.std()
+        return abs(error - mean) > num_sigma * std
     
     def __get_reasonable_predictors__(self, predictors_infos) :
         if (len(predictors_infos) == 0) :
             raise ValueError("Predictors list is emply!")
         
-        predictors_infos = sorted(predictors_infos, key=lambda x: x.error)[:self.predictors_consider]
-        if (len(predictors_infos) < 3) :
-            return [predictors_infos[0]]
-        
-        # return predictors_infos[0:3]
-        return predictors_infos[1:-1]
+        predictors = sorted(predictors_infos, key=lambda x: x.error)[:self.predictors_consider]
+        return predictors[1:-1] if len(predictors) >= 3 else predictors[:1]
     
     def __remove_outliers__(self, errors, num_sigma = 3) :
-        mean_error = np.mean(errors)
-        std_error = np.std(errors)
+        mean, std = errors.mean(), errors.std()
 
-        threshold = mean_error + num_sigma * std_error
-
-        outlier_indices = np.where(np.abs(errors - mean_error) > threshold)[0]
+        outlier_indices = np.where(np.abs(errors - mean) > num_sigma * std)[0]
         good_errors = errors
         good_errors[outlier_indices] = 0
 
         return good_errors
     
     # L2 error
-    def __eval_penalty__(self, src_id, dst_id, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2) :
-        ri = pts1[near_neighb_inds_pts1[src_id]] - pts1[src_id]
-        rj = pts2[near_neighb_inds_pts2[dst_id]] - pts2[dst_id]
-
-        # Calculate the squared distance matrix for relative particle points
-        dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * np.dot(ri, rj.T)
-
-        # Cost is the sum of distances between n_use points
-        errors = np.sqrt(np.partition(np.min(dij, axis=1), self.n_use)[:self.n_use])
+    def __eval_penalty__(self, src_id, dst_id, pts1, near_pts1, pts2, near_pts2):
+        ri = pts1[near_pts1[src_id]] - pts1[src_id]
+        rj = pts2[near_pts2[dst_id]] - pts2[dst_id]
+        dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * ri.dot(rj.T)
+        errors = np.sqrt(np.partition(dij.min(axis=1), self.n_use)[:self.n_use])
         good_errors = self.__remove_outliers__(errors)
-
-        return np.sum(good_errors)
+        return good_errors.sum()
     
-    def __eval_penalties__(self, src_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2):
+    def __eval_penalties__(self, src_id, inds_near, pts1, near_pts1, pts2, near_pts2):
         if len(inds_near) == 0 :
             raise ValueError("Indices array is empty!")
-        
-        pm = []
-        for j in inds_near:
-            error = self.__eval_penalty__(src_id, j, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-            pm.append(error)
-        
-        return pm
+        return [self.__eval_penalty__(src_id, j, pts1, near_pts1, pts2, near_pts2) for j in inds_near]
     
     def __get_near_inds__(self, coord, pts, sample_start_point=False) :
         if (sample_start_point) :
@@ -345,38 +279,31 @@ class ReliabilityRAFTSolver :
         return np.where(inds_near)[0]
 
 
-    def __sample_start_point__(self, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2) :
-        n_pts1 = pts1.shape[0]
-        n_pts2 = pts2.shape[0]
-
-        if (self.init_prediction_method == 'UseProvided') :
-            error  = self.__eval_penalty__(self.first_ids[0], self.first_ids[1], pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-            return self.first_ids[0], self.first_ids[1], error
+    def __sample_start_point__(self, pts1, near_pts1, pts2, near_pts2) :
+        if self.init_prediction_method == 'UseProvided' and self.first_ids:
+            src, dst = self.first_ids
+            error = self.__eval_penalty__(src, dst, pts1, near_pts1, pts2, near_pts2)
+            return src, dst, error
 
         # Random Sampling
-
-        tries = int(self.sample_ratio * n_pts1)
+        tries = int(self.sample_ratio * pts1.shape[0])
         random.seed(0)
-        sample_candidates = random.sample(range(0, n_pts1), tries)
-
+        sample_candidates = random.sample(range(pts1.shape[0]), tries)
         errors = []
         dest_ids = []
         for i in sample_candidates:
             inds_near = self.__get_near_inds__(pts1[i], pts2, sample_start_point=True)
-
-            if len(inds_near) > 0:
-                pm = self.__eval_penalties__(i, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-
-                # Find the minimum penalty and corresponding point in pts2
-                penalty = min(pm)
-                dest_ids.append(inds_near[np.argmin(pm)])
-                errors.append(penalty)
-            else :
-                errors.append(float("inf"))
+            if inds_near.size:
+                penalties = self.__eval_penalties__(i, inds_near, pts1, near_pts1, pts2, near_pts2)
+                dest_ids.append(inds_near[penalties.argmin()] if penalties.size else -1)
+                errors.append(penalties.min() if penalties.size else float("inf"))
+            else:
                 dest_ids.append(-1)
+                errors.append(float("inf"))
 
         errors = np.array(errors)
-        return sample_candidates[np.argmin(errors)], dest_ids[np.argmin(errors)], np.min(errors)
+        min_idx = errors.argmin()
+        return sample_candidates[min_idx], dest_ids[min_idx], errors[min_idx]
         
 def save_track_path_to_image(trace, image_path) :
     min_x = min(p[0] for p in trace)
@@ -410,9 +337,6 @@ def save_track_path_to_image(trace, image_path) :
     plt.close()
 
 def choose_start_GUI(data1, data2) :
-    x_shift = max(data1['x'].max(), data2['x'].max()) * 1.5
-    # data2['x'] += x_shift
-
     selected_particles = [-1, -1]
 
     def on_click_left(event):
@@ -460,7 +384,6 @@ def choose_start_GUI(data1, data2) :
 
     return selected_particles
 
-
 def link_particles_and_compare(static_csv, deformed_csv, sample_random = False):
     # Load the static and deformed particle data from CSV files
     static_data = pd.read_csv(static_csv)
@@ -486,7 +409,7 @@ def link_particles_and_compare(static_csv, deformed_csv, sample_random = False):
                                    n_consider=16, n_use=10)
 
     tracked_data, trace = solver.track_reliability_RAFT(combined_data)
-    # save_track_path_to_image(trace, 'trace.png')
+    save_track_path_to_image(trace, 'trace.png')
 
 
     linked_static = tracked_data[tracked_data['time'] == 0][['particle', 'id']].rename(columns={'id': 'id_static'})
@@ -515,6 +438,6 @@ def link_particles_and_compare(static_csv, deformed_csv, sample_random = False):
 
 
 # Example usage:
-# link_particles_and_compare('hard_real_particle_static.csv', 'hard_real_particle_deformed.csv')
-link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
+link_particles_and_compare('hard_real_particle_static.csv', 'hard_real_particle_deformed.csv')
+# link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
 # link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv')

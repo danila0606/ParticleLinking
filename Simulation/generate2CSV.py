@@ -23,9 +23,9 @@ else :
 
 # Create folders to save the 2D image slices for original and rotated particles
 output_folder_static = 'black_image_stack_spherical_particles_full_z_correct_size_tiff_static'
-output_folder_rotated = 'black_image_stack_spherical_particles_full_z_correct_size_tiff_rotated_z_axis'
+output_folder_deformed = 'black_image_stack_spherical_particles_full_z_correct_size_tiff_rotated_z_axis'
 os.makedirs(output_folder_static, exist_ok=True)
-os.makedirs(output_folder_rotated, exist_ok=True)
+os.makedirs(output_folder_deformed, exist_ok=True)
 
 # Generate random 3D positions for particles with x, y, and z in the range [0, image_size_xy] for x and y, [0, image_size_z] for z
 np.random.seed(0)
@@ -142,9 +142,9 @@ def save_images(output_folder, is_deformed=False):
 
         # Save the image as a TIFF file
         if is_deformed:
-            filename = os.path.join(output_folder_rotated, f'slice_deformed_z_{i:02d}.tiff')
+            filename = os.path.join(output_folder, f'slice_deformed_z_{i:02d}.tiff')
         else:
-            filename = os.path.join(output_folder_static, f'slice_static_{i:02d}.tiff')
+            filename = os.path.join(output_folder, f'slice_static_{i:02d}.tiff')
         
         img = Image.fromarray(image)  # Convert numpy array to PIL image
         img.save(filename, format='TIFF')
@@ -152,8 +152,8 @@ def save_images(output_folder, is_deformed=False):
 # Save static images
 save_images(output_folder_static, is_deformed=False)
 # Save rotated images
-save_images(output_folder_rotated, is_deformed=True)
+save_images(output_folder_deformed, is_deformed=True)
 
-print(f"30 layers of {image_size_xy}x{image_size_xy} TIFF images with static particles saved to '{output_folder_static}' folder.")
-print(f"30 layers of {image_size_xy}x{image_size_xy} TIFF images with spherical particles rotated around the z-axis saved to '{output_folder_rotated}' folder.")
-print("Particle data saved to 'particle_data_static.csv' and 'particle_data_rotated.csv'.")
+# print(f"30 layers of {image_size_xy}x{image_size_xy} TIFF images with static particles saved to '{output_folder_static}' folder.")
+# print(f"30 layers of {image_size_xy}x{image_size_xy} TIFF images with spherical particles deformed saved to '{output_folder_deformed}' folder.")
+print("Particle data saved to 'particle_data_static.csv' and 'particle_data_deformed.csv'.")

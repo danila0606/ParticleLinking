@@ -5,11 +5,11 @@ import matplotlib.pyplot as plt
 # static_particles = pd.read_csv('hard_real_particle_static.csv')
 # deformed_particles = pd.read_csv('hard_real_particle_deformed.csv')
 
-static_particles = pd.read_csv('real_particle_static.csv')
-deformed_particles = pd.read_csv('real_particle_deformed.csv')
+# static_particles = pd.read_csv('real_particle_static.csv')
+# deformed_particles = pd.read_csv('real_particle_deformed.csv')
 
-# static_particles = pd.read_csv('particle_data_static.csv')
-# deformed_particles = pd.read_csv('particle_data_deformed.csv')
+static_particles = pd.read_csv('particle_data_static.csv')
+deformed_particles = pd.read_csv('particle_data_deformed.csv')
 
 connections = pd.read_csv('linked_particle_comparison.csv')
 

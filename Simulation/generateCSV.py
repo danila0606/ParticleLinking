@@ -4,32 +4,24 @@ import pandas as pd
 import random
 
 # Configuration Parameters
-IMAGE_SIZE_XY = 2000        # Size of the XY plane
+IMAGE_SIZE_XY = 2000       # Size of the XY plane
 IMAGE_SIZE_Z = 1            # Size of the Z-axis
-NUM_PARTICLES = 20       # Total number of particles
-ADD_BLINKING = True         # Toggle blinking behavior
+NUM_PARTICLES = 2000      # Total number of particles
+ADD_BLINKING = False         # Toggle blinking behavior
 BLINKING_NUM = 2          # Number of particles that blink per iteration
 MEMORY = 2                  # Number of iterations a blinked particle remains invisible
-ITERATIONS = 10             # Number of deformation iterations
+ITERATIONS = 2             # Number of deformation iterations
 DEFORMATION_FUNCTION = 'linear'  # Options: 'linear', 'crack'
 OUTPUT_DIR = 'particle_data_iterations'  # Directory to save CSV files
+
+ROI_MIN = [100, 100, 0]
+ROI_MAX = [500, 500, IMAGE_SIZE_Z]
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Initialize Blinking Behavior
-def initialize_blinking(num_particles, blinking_num):
-    """
-    Initialize blinking flags and cooldown timers for particles.
-    
-    Parameters:
-        num_particles (int): Total number of particles.
-        blinking_num (int): Number of particles that can blink per iteration.
-        
-    Returns:
-        blink_flags (np.ndarray): Boolean array indicating which particles can blink.
-        blink_cooldown (np.ndarray): Integer array tracking cooldown iterations for each particle.
-    """
+def initialize_blinking(num_particles):
     if ADD_BLINKING:
         # Initially, all particles are eligible to blink
         blink_flags = np.array([True] * num_particles)
@@ -41,37 +33,17 @@ def initialize_blinking(num_particles, blinking_num):
     return blink_flags, blink_cooldown
 
 # Generate Random 3D Positions
-def generate_positions(num_particles, image_size_xy, image_size_z):
-    """
-    Generate random 3D positions for particles.
-    
-    Parameters:
-        num_particles (int): Total number of particles.
-        image_size_xy (int): Size of the XY plane.
-        image_size_z (int): Size of the Z-axis.
-        
-    Returns:
-        x, y, z (np.ndarray): Arrays of x, y, z coordinates.
-    """
+def generate_positions(num_particles):
     np.random.seed(0)
-    x = np.random.uniform(low=100, high=image_size_xy - 1100, size=num_particles)
+    x = np.random.uniform(low=ROI_MIN[0], high=ROI_MAX[0], size=num_particles)
     np.random.seed(1)
-    y = np.random.uniform(low=100, high=image_size_xy - 1100, size=num_particles)
+    y = np.random.uniform(low=ROI_MIN[1], high=ROI_MAX[1], size=num_particles)
     np.random.seed(2)
-    z = np.random.uniform(low=0, high=image_size_z, size=num_particles)
+    z = np.random.uniform(low=ROI_MIN[2], high=ROI_MAX[2], size=num_particles)
     return x, y, z
 
 # Generate Particle Sizes and Mass
 def generate_sizes_and_mass(num_particles):
-    """
-    Generate random sizes and compute mass for each particle.
-    
-    Parameters:
-        num_particles (int): Total number of particles.
-        
-    Returns:
-        sizes, mass (np.ndarray): Arrays of sizes and masses.
-    """
     np.random.seed(0)
     sizes = np.random.uniform(low=3, high=4, size=num_particles)  # Radius in 3D
     mass = (4 / 3) * np.pi * (sizes ** 3)  # Volume of a sphere
@@ -79,15 +51,6 @@ def generate_sizes_and_mass(num_particles):
 
 # Save Static Particle Data
 def save_static_particles(x, y, z, mass, particle_ids, output_path):
-    """
-    Save static particle data to a CSV file.
-    
-    Parameters:
-        x, y, z (np.ndarray): Coordinates of particles.
-        mass (np.ndarray): Mass of particles.
-        particle_ids (np.ndarray): IDs of particles.
-        output_path (str): File path to save the CSV.
-    """
     particle_data = pd.DataFrame({
         'x': x,
         'y': y,
@@ -100,18 +63,6 @@ def save_static_particles(x, y, z, mass, particle_ids, output_path):
 
 # Displacement Functions
 def calculate_displacement_crack(x, y, K_I, mu, kappa):
-    """
-    Calculate displacement fields for Mode I crack deformation.
-    
-    Parameters:
-        x, y (np.ndarray): Coordinates relative to crack tip.
-        K_I (float): Stress intensity factor.
-        mu (float): Shear modulus.
-        kappa (float): Parameter related to Poisson's ratio.
-        
-    Returns:
-        u_x, u_y (np.ndarray): Displacement components.
-    """
     r = np.sqrt(x**2 + y**2)
     theta = np.arctan2(y, x)  # Angle in radians
     
@@ -125,19 +76,7 @@ def calculate_displacement_crack(x, y, K_I, mu, kappa):
     return u_x, u_y
 
 def calculate_displacement_linear(x, y, iteration, scaling_factor=1.0):
-    """
-    Calculate linear displacement.
-    
-    Parameters:
-        x, y (np.ndarray): Coordinates.
-        iteration (int): Current iteration number.
-        scaling_factor (float): Scaling factor for displacement.
-        
-    Returns:
-        u_x, u_y (np.ndarray): Displacement components.
-    """
-    # u_x = scaling_factor * x / 10.0 * (iteration + 1)  # Progressive displacement
-    u_x = np.ones_like(x)
+    u_x = scaling_factor * x / 10.0 * (iteration + 1)  # Progressive displacement
     u_y = np.zeros_like(u_x)  # No displacement in y-direction
     return u_x, u_y
 
@@ -147,22 +86,7 @@ def apply_deformation(
     iterations, deformation_function='linear', output_dir='particle_data_iterations',
     blinking_num=100, memory=1
 ):
-    """
-    Apply deformation to particles over multiple iterations, managing blinking with memory.
-    
-    Parameters:
-        x_original, y_original (np.ndarray): Original coordinates of particles.
-        z (np.ndarray): Z-coordinates of particles.
-        mass (np.ndarray): Mass of particles.
-        particle_ids (np.ndarray): IDs of particles.
-        blink_flags (np.ndarray): Boolean array indicating which particles can blink.
-        blink_cooldown (np.ndarray): Array tracking cooldown iterations for each particle.
-        iterations (int): Number of deformation iterations.
-        deformation_function (str): Type of deformation ('linear' or 'crack').
-        output_dir (str): Directory to save CSV files.
-        blinking_num (int): Number of particles that blink per iteration.
-        memory (int): Number of iterations a blinked particle remains invisible.
-    """
+
     # Crack Tip and Mode I Parameters (Adjust as needed)
     K_I = 2      # Stress intensity factor
     mu = 1.0     # Shear modulus
@@ -173,9 +97,7 @@ def apply_deformation(
     x_current = np.copy(x_original)
     y_current = np.copy(y_original)
     
-    for iteration in range(iterations):
-        print(f"Processing iteration {iteration + 1}/{iterations}...")
-        
+    for iteration in range(iterations):        
         # Decrement cooldown timers
         blink_cooldown = np.maximum(blink_cooldown - 1, 0)
         
@@ -247,10 +169,10 @@ def apply_deformation(
 # Main Execution Flow
 def main():
     # Initialize Blinking Flags and Cooldowns
-    blink_flags, blink_cooldown = initialize_blinking(NUM_PARTICLES, BLINKING_NUM)
+    blink_flags, blink_cooldown = initialize_blinking(NUM_PARTICLES)
     
     # Generate Positions, Sizes, and Mass
-    x, y, z = generate_positions(NUM_PARTICLES, IMAGE_SIZE_XY, IMAGE_SIZE_Z)
+    x, y, z = generate_positions(NUM_PARTICLES)
     sizes, mass = generate_sizes_and_mass(NUM_PARTICLES)
     particle_ids = np.arange(NUM_PARTICLES)
     

@@ -438,6 +438,6 @@ def link_particles_and_compare(static_csv, deformed_csv, sample_random = False):
 
 
 # Example usage:
-link_particles_and_compare('hard_real_particle_static.csv', 'hard_real_particle_deformed.csv')
+link_particles_and_compare('particle_data_iterations/particle_t_0.csv', 'particle_data_iterations/particle_t_1.csv')
 # link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
 # link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv')

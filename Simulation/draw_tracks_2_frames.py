@@ -2,14 +2,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load the data from the CSV files
-# static_particles = pd.read_csv('hard_real_particle_static.csv')
-# deformed_particles = pd.read_csv('hard_real_particle_deformed.csv')
+static_particles = pd.read_csv('particle_data_iterations/particle_t_0.csv')
+deformed_particles = pd.read_csv('particle_data_iterations/particle_t_1.csv')
 
 # static_particles = pd.read_csv('real_particle_static.csv')
 # deformed_particles = pd.read_csv('real_particle_deformed.csv')
 
-static_particles = pd.read_csv('particle_data_static.csv')
-deformed_particles = pd.read_csv('particle_data_deformed.csv')
+# static_particles = pd.read_csv('particle_data_static.csv')
+# deformed_particles = pd.read_csv('particle_data_deformed.csv')
 
 connections = pd.read_csv('linked_particle_comparison.csv')
 

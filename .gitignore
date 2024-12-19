@@ -1,4 +1,5 @@
 .vscode
+__pycache__
 backup.py
 display.py
 probs.py
@@ -17,3 +18,7 @@ real_particle_deformed.csv
 real_particle_static.csv
 Simulation/particle_data_iterations
 Simulation/linked_data.csv
+Simulation/generated_particle_data
+Simulation/hard_particle_data
+Simulation/real_particle_data
+Simulation/trace

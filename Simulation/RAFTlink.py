@@ -1,13 +1,6 @@
 import numpy as np
 import pandas as pd
 import random
-import matplotlib.pyplot as plt
-import functools
-import os
-import re
-
-CSV_FOLDER = 'particle_data_iterations'
-RANDOM_SAMPLE = False
 
 class ReliabilityRAFTSolver :
     class LinkInfo:
@@ -15,14 +8,19 @@ class ReliabilityRAFTSolver :
             self.id = id
             self.error = error
 
-    def __init__(self, dim, init_prediction_method, maxdisp, sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, **kwargs) :
-        if init_prediction_method not in ['SampleRandom', 'UseProvided']:
-            raise ValueError(f"Invalid prediction method: {init_prediction_method}")
+    def __init__(self, dim, do_random_sampling, maxdisp, sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, save_trace = False, error_f='L2', sigma_threshold = 3.0, **kwargs) :
+        if error_f not in ['L2', 'STRAIN']:
+            raise ValueError(f"Invalid prediction method: {error_f}")
         
-        self.init_prediction_method = init_prediction_method
+        self.error_f = error_f
+        self.sigma_threshold = sigma_threshold
+
+        self.do_random_sampling = do_random_sampling
         self.sample_search_range_coef = sample_search_range_coef
         self.sample_ratio = sample_ratio
         self.maxdisp = maxdisp
+
+        self.save_trace = save_trace
 
         self.maxdisp_x = kwargs.get('x', maxdisp)
         self.maxdisp_y = kwargs.get('y', maxdisp)
@@ -62,9 +60,9 @@ class ReliabilityRAFTSolver :
 
         res[t][prev_id] = -1
 
-    def track_reliability_RAFT(self, id_xyzt):
+    def track_reliability_RAFT(self, data_frame):
         # Set optional parameters from kwargs
-        xyzt = id_xyzt[['x', 'y', 'z', 'time']].to_numpy()
+        xyzt = data_frame[['x', 'y', 'z', 'time']].to_numpy()
 
         # Extract unique time points and trackable time indices
         times = xyzt[:, -1]
@@ -75,18 +73,16 @@ class ReliabilityRAFTSolver :
             raise ValueError("No consecutive time points found for tracking")
 
         res = []
+        traces = []
         for time in range(len(unique_times) - 1) :
             pts1 = xyzt[times == unique_times[time], :self.dim]
             pts2 = xyzt[times == unique_times[time + 1], :self.dim]
-            res.append(self.__reliability_flow_tracker__(pts1, pts2, time))
+            result, trace = self.__reliability_flow_tracker__(pts1, pts2, time)
+            res.append(result)
+            traces.append(trace)
         
-        # print(res)
         xyzti = np.column_stack((xyzt, np.full((xyzt.shape[0], 1), -1)))
         id = 0
-        # print(xyzti)
-        # print("after")
-        # self.__insert_id__(xyzti, 1, 4, 5)
-        # print(xyzti)
 
         for time in range(len(unique_times) - 1) :
             cur_link = res[time]
@@ -95,14 +91,10 @@ class ReliabilityRAFTSolver :
                     self.__add_tracks__(xyzti, res, i, id, time, unique_times)
                     id += 1
 
-        df = pd.DataFrame(xyzti, columns=['x', 'y', 'z', 'time', 'particle'])
-        df['x'] = df['x'].astype(float)
-        df['y'] = df['y'].astype(float)
-        df['z'] = df['z'].astype(float)
-        df['time'] = df['time'].astype(int)
-        df['particle'] = df['particle'].astype(int)
+        df = data_frame.copy()
+        df['particle'] = xyzti[:, -1]
 
-        return pd.concat([id_xyzt[['id']], df], axis = 1)
+        return df, traces
 
     def __find_nearest_neighbors__(self, pts, n_neighbors):
         dists = np.sum((pts[:, np.newaxis] - pts[np.newaxis, :])**2, axis=2)
@@ -236,11 +228,14 @@ class ReliabilityRAFTSolver :
             cur_stack_p = len(source_pts_stack)
             source_pts_stack.append(next_src_pt_id)
 
+        trace = []
+        if self.save_trace :
+            trace = [np.array(pts1[link_info][:2]) for link_info in source_pts_stack]
         links_arr = np.array([info.id for info in linked_source_pts])
-        return links_arr
+        return links_arr, trace
         # return np.column_stack((np.arange(len(linked_source_pts)), links_arr))
     
-    def __is_big_error__(self, errors, error, num_sigma = 3.0, min_errors_to_consider = 10) :
+    def __is_big_error__(self, errors, error, min_errors_to_consider = 10) :
         if (error < 0) :
             return True
 
@@ -249,7 +244,7 @@ class ReliabilityRAFTSolver :
             return False
 
         mean, std = valid_errors.mean(), valid_errors.std()
-        return abs(error - mean) > num_sigma * std
+        return abs(error - mean) > self.sigma_threshold * std
     
     def __get_reasonable_predictors__(self, predictors_infos) :
         if (len(predictors_infos) == 0) :
@@ -258,10 +253,10 @@ class ReliabilityRAFTSolver :
         predictors = sorted(predictors_infos, key=lambda x: x.error)[:self.predictors_consider]
         return predictors[1:-1] if len(predictors) >= 3 else predictors[:1]
     
-    def __remove_outliers__(self, errors, num_sigma = 3) :
+    def __remove_outliers__(self, errors) :
         mean, std = errors.mean(), errors.std()
 
-        outlier_indices = np.where(np.abs(errors - mean) > num_sigma * std)[0]
+        outlier_indices = np.where(np.abs(errors - mean) > self.sigma_threshold * std)[0]
         good_errors = errors
         good_errors[outlier_indices] = 0
 
@@ -269,12 +264,23 @@ class ReliabilityRAFTSolver :
     
     # L2 error
     def __eval_penalty__(self, src_id, dst_id, pts1, near_pts1, pts2, near_pts2):
-        ri = pts1[near_pts1[src_id]] - pts1[src_id]
-        rj = pts2[near_pts2[dst_id]] - pts2[dst_id]
-        dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * ri.dot(rj.T)
-        errors = np.sqrt(np.partition(dij.min(axis=1), self.n_use)[:self.n_use])
-        good_errors = self.__remove_outliers__(errors)
-        return good_errors.sum()
+        if self.error_f == 'L2' :
+            ri = pts1[near_pts1[src_id]] - pts1[src_id]
+            rj = pts2[near_pts2[dst_id]] - pts2[dst_id]
+            dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * ri.dot(rj.T)
+            errors = np.sqrt(np.partition(dij.min(axis=1), self.n_use)[:self.n_use])
+            good_errors = self.__remove_outliers__(errors)
+            return good_errors.sum()
+        else : # Strain
+            ri = pts1[near_pts1[src_id]] - pts1[src_id]
+            rj = pts2[near_pts2[dst_id]] - pts2[dst_id]
+            diff = ri[:, np.newaxis, :] - rj[np.newaxis, :, :]
+            deltas = np.linalg.norm(diff, axis=2)
+            ri_lens = np.linalg.norm(ri, axis=1)
+            dij = deltas / ri_lens[:, np.newaxis]
+            errors = np.sqrt(np.partition(dij.min(axis=1), self.n_use)[:self.n_use])
+            good_errors = self.__remove_outliers__(errors)
+            return errors.sum()
     
     def __eval_penalties__(self, src_id, inds_near, pts1, near_pts1, pts2, near_pts2):
         if len(inds_near) == 0 :
@@ -310,7 +316,7 @@ class ReliabilityRAFTSolver :
 
 
     def __sample_start_point__(self, pts1, near_pts1, pts2, near_pts2, time) :
-        if self.init_prediction_method == 'UseProvided' and self.first_ids:
+        if self.do_random_sampling == False and self.first_ids:
             src, dst = self.first_ids[time]
             error = self.__eval_penalty__(src, dst, pts1, near_pts1, pts2, near_pts2)
             return src, dst, error
@@ -325,8 +331,8 @@ class ReliabilityRAFTSolver :
             inds_near = self.__get_near_inds__(pts1[i], pts2, sample_start_point=True)
             if inds_near.size:
                 penalties = self.__eval_penalties__(i, inds_near, pts1, near_pts1, pts2, near_pts2)
-                dest_ids.append(inds_near[penalties.argmin()] if penalties.size else -1)
-                errors.append(penalties.min() if penalties.size else float("inf"))
+                dest_ids.append(inds_near[np.array(penalties).argmin()] if (len(penalties) > 0) else -1)
+                errors.append(min(penalties) if (len(penalties) > 0) else float("inf"))
             else:
                 dest_ids.append(-1)
                 errors.append(float("inf"))
@@ -335,115 +341,3 @@ class ReliabilityRAFTSolver :
         min_idx = errors.argmin()
         return sample_candidates[min_idx], dest_ids[min_idx], errors[min_idx]
 
-
-def choose_start_GUI(data1, data2) :
-    selected_particles = [-1, -1]
-
-    def on_click_left(event):
-        if event.inaxes is not None:
-            x, y = event.xdata, event.ydata
-            distances = ((data1['x'] - x) ** 2 + (data1['y'] - y) ** 2).pow(0.5)
-            selected_particles[0] = distances.idxmin()
-            print(f"Selected particle from t=0: ID={selected_particles[0]}")
-
-    def on_click_right(event):
-        if event.inaxes is not None:
-            x, y = event.xdata, event.ydata
-            distances = ((data2['x'] - x) ** 2 + (data2['y'] - y) ** 2).pow(0.5)
-            selected_particles[1] = distances.idxmin()
-            print(f"Selected particle from t=1: ID={selected_particles[1]}")
-
-    def on_key(event):
-        if event.key == "enter":
-            plt.close("all")
-            print("Selected Particles:")
-            print(f"t=0 Particle ID: {selected_particles[0]}")
-            print(f"t=1 Particle ID: {selected_particles[1]}")
-
-    fig1, ax1 = plt.subplots(figsize=(8, 6))
-    ax1.scatter(data1['x'], data1['y'], color='blue', label='File 1 Particles', zorder=2, s=2)
-    ax1.set_title('Particles from time 0 (Left)')
-    ax1.set_xlabel('X Coordinate')
-    ax1.set_ylabel('Y Coordinate')
-    ax1.legend()
-    ax1.grid(True)
-    fig1.canvas.mpl_connect('button_press_event', on_click_left)
-
-    fig2, ax2 = plt.subplots(figsize=(8, 6))
-    ax2.scatter(data2['x'], data2['y'], color='red', label='File 2 Particles', zorder=2, s=2)
-    ax2.set_title('Particles from time 1 (Right)')
-    ax2.set_xlabel('X Coordinate')
-    ax2.set_ylabel('Y Coordinate')
-    ax2.legend()
-    ax2.grid(True)
-    fig2.canvas.mpl_connect('button_press_event', on_click_right)
-
-    fig1.canvas.mpl_connect('key_press_event', on_key)
-    fig2.canvas.mpl_connect('key_press_event', on_key)
-    plt.show()
-
-    return selected_particles
-
-def link_particles_and_compare(csv_file_names_list):
-
-    data = []
-    for i in range(len(csv_file_names_list)) :
-        tmp_data = pd.read_csv(CSV_FOLDER + '/' + csv_file_names_list[i])
-        tmp_data['time'] = i
-        data.append(tmp_data)
-    
-    combined_data = pd.concat(data, ignore_index=True)
-
-    first_ids = []
-    if not RANDOM_SAMPLE :
-        method = 'UseProvided'
-        for i in range(len(csv_file_names_list) - 1) :
-            first_ids.append(choose_start_GUI(data[i], data[i + 1]))
-
-        solver = ReliabilityRAFTSolver(3, method, maxdisp=15, first_ids=first_ids, n_consider=10, n_use=8)
-    else :
-        method = 'SampleRandom'
-        solver = ReliabilityRAFTSolver(3, method, maxdisp=15, sample_ratio=0.03, sample_search_range_coef=2.5, n_consider=16, n_use=10)
-
-    tracked_data = solver.track_reliability_RAFT(combined_data)
-    # print(tracked_data)
-
-    links = []
-    for t in range(len(csv_file_names_list)) :
-        links.append(tracked_data[tracked_data['time'] == t][['particle', 'id']].rename(columns={'id': f'id_{t}'}))
-
-    # Merge particles on 'particle' to get pairs of linked IDs
-    linked_comparison = functools.reduce(lambda  left,right: pd.merge(left, right, on=['particle']), links)
-
-    linked_comparison['correct_link'] = (linked_comparison.nunique(axis=1) == 1).astype(int)
-    # Calculate the number of correctly linked particles
-    correct_links = linked_comparison['correct_link'].sum()
-    total_links = len(linked_comparison)
-
-    # Calculate accuracy
-    accuracy = correct_links / total_links * 100
-
-    # Output the results
-    print(f"Total tracks: {total_links}")
-    print(f"Correctly found tracks: {correct_links}")
-    print(f"Linking accuracy: {accuracy:.2f}%")
-
-    # Optionally save the comparison results to a CSV for analysis
-    tracked_data.to_csv('linked_data.csv', index=False)
-
-
-def get_csv_filenames(folder) :
-    num_pattern = re.compile(r'\d+')
-    filenames = [f for f in os.listdir(folder) if f.endswith('.csv')]
-    
-    sorted_filenames = sorted(
-        filenames,
-        key=lambda x: int(num_pattern.search(x).group()) if num_pattern.search(x) else float('inf')
-    )
-    
-    return sorted_filenames
-
-
-link_particles_and_compare(get_csv_filenames(CSV_FOLDER))
-# link_particles_and_compare('real_particle_static.csv', 'real_particle_deformed.csv')
-# link_particles_and_compare('particle_data_static.csv', 'particle_data_deformed.csv')

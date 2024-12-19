@@ -7,15 +7,18 @@ import random
 IMAGE_SIZE_XY = 2000       # Size of the XY plane
 IMAGE_SIZE_Z = 1            # Size of the Z-axis
 NUM_PARTICLES = 2000      # Total number of particles
+
 ADD_BLINKING = False         # Toggle blinking behavior
-BLINKING_NUM = 2          # Number of particles that blink per iteration
-MEMORY = 2                  # Number of iterations a blinked particle remains invisible
+BLINKING_NUM = 200          # Number of particles that blink per iteration
+MEMORY = 1                  # Number of iterations a blinked particle remains invisible
+
 ITERATIONS = 2             # Number of deformation iterations
 DEFORMATION_FUNCTION = 'linear'  # Options: 'linear', 'crack'
-OUTPUT_DIR = 'particle_data_iterations'  # Directory to save CSV files
+OUTPUT_DIR = 'generated_particle_data'  # Directory to save CSV files
 
+# Where particles will be generated
 ROI_MIN = [100, 100, 0]
-ROI_MAX = [500, 500, IMAGE_SIZE_Z]
+ROI_MAX = [500, 1900, IMAGE_SIZE_Z]
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -56,7 +59,10 @@ def save_static_particles(x, y, z, mass, particle_ids, output_path):
         'y': y,
         'z': z,
         'mass': mass,
-        'id': particle_ids
+        'id': particle_ids,
+        'ux': np.zeros_like(particle_ids),
+        'uy': np.zeros_like(particle_ids),
+        'iteration': 0
     })
     particle_data.to_csv(output_path, index=False)
     print(f"Static particle data saved to '{output_path}'.")
@@ -76,7 +82,7 @@ def calculate_displacement_crack(x, y, K_I, mu, kappa):
     return u_x, u_y
 
 def calculate_displacement_linear(x, y, iteration, scaling_factor=1.0):
-    u_x = scaling_factor * x / 10.0 * (iteration + 1)  # Progressive displacement
+    u_x = scaling_factor * (iteration + 1) * x / 10.0  # Progressive displacement
     u_y = np.zeros_like(u_x)  # No displacement in y-direction
     return u_x, u_y
 
@@ -112,7 +118,7 @@ def apply_deformation(
         blinked_indices = np.random.choice(eligible_indices, size=current_blinking_num, replace=False) if current_blinking_num > 0 else np.array([], dtype=int)
         
         # Set cooldown for blinked particles
-        blink_cooldown[blinked_indices] = memory
+        blink_cooldown[blinked_indices] = memory + 1
         
         # Create a mask for particles visible in this iteration
         blink_mask = np.ones(NUM_PARTICLES, dtype=bool)

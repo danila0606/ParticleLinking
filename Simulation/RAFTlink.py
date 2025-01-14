@@ -8,7 +8,20 @@ class ReliabilityRAFTSolver :
             self.id = id
             self.error = error
 
-    def __init__(self, dim, do_random_sampling, maxdisp, sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, save_trace = False, error_f='L2', sigma_threshold = 3.0, **kwargs) :
+    class ResultLinks:
+        def __init__ (self, time_static, time_deformed, pts1, pts2, links):
+            self.time_static   = time_static
+            self.time_deformed = time_deformed
+            self.pts1          = pts1
+            self.pts2          = pts2
+            self.links         = links
+
+    def __init__(self, dim, do_random_sampling, maxdisp, \
+                 sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, \
+                 save_trace = False, \
+                 error_f='L2', sigma_threshold = 3.0, \
+                 memory=1, **kwargs) :
+        
         if error_f not in ['L2', 'STRAIN']:
             raise ValueError(f"Invalid prediction method: {error_f}")
         
@@ -32,33 +45,19 @@ class ReliabilityRAFTSolver :
 
         self.first_ids = first_ids
 
-        self.drop_stack = False # True
         self.predictors_consider = 5
 
-    def __insert_id__(self, xyzti, time, src_id, id) :
-        slice_condition = xyzti[:, 3] == time
-        sliced_data = xyzti[slice_condition]
-        sliced_data[src_id, 4] = id
-        xyzti[slice_condition] = sliced_data
+        self.memory = memory
 
-    def __add_tracks__(self, xyzti, res, static_id, id, static_time, times) :
-        self.__insert_id__(xyzti, static_time, static_id, id)
 
-        prev_id = static_id
-        for t in range (static_time, len(times) - 1) :
-            if t == 0 : 
-                cur_id = static_id
-            else :
-                cur_id = res[t - 1][prev_id]
-                res[t - 1][prev_id] = -1 # avoid duplicating
-            
-            if res[t][cur_id] < 0:
-                return
+    def __get_links_with_time__(self, all_links, time) :
+        links = []
+        for link in all_links :
+            if (link.time_static == time) :
+                links.append(link)
 
-            self.__insert_id__(xyzti, t + 1, res[t][cur_id], id)
-            prev_id = cur_id
-
-        res[t][prev_id] = -1
+        links = sorted(links, key=lambda x: x.time_deformed)
+        return links
 
     def track_reliability_RAFT(self, data_frame):
         # Set optional parameters from kwargs
@@ -77,19 +76,33 @@ class ReliabilityRAFTSolver :
         for time in range(len(unique_times) - 1) :
             pts1 = xyzt[times == unique_times[time], :self.dim]
             pts2 = xyzt[times == unique_times[time + 1], :self.dim]
-            result, trace = self.__reliability_flow_tracker__(pts1, pts2, time)
-            res.append(result)
+            res, trace = self.__reliability_flow_tracker__(pts1, pts2, time, res)
+            # res.extend(results)
             traces.append(trace)
         
         xyzti = np.column_stack((xyzt, np.full((xyzt.shape[0], 1), -1)))
-        id = 0
 
+        id = 0
         for time in range(len(unique_times) - 1) :
-            cur_link = res[time]
-            for i in range (cur_link.shape[0]) :
-                if cur_link[i] >= 0 :
-                    self.__add_tracks__(xyzti, res, i, id, time, unique_times)
-                    id += 1
+            static_condition = xyzti[:, 3] == time
+            static_data = xyzti[static_condition]
+            links = self.__get_links_with_time__(res, time)
+            for cur_link in links :
+                deformed_condition = xyzti[:, 3] == cur_link.time_deformed
+                deformed_data = xyzti[deformed_condition]
+                for src_id in range(0, len(cur_link.links)) :
+                    if (cur_link.links[src_id] == -1) :
+                        continue
+                    
+
+                    if static_data[src_id, 4] == -1 :
+                        static_data[src_id, 4] = id
+                        id += 1
+
+                    deformed_data[cur_link.links[src_id], 4] = static_data[src_id, 4]
+
+                xyzti[deformed_condition] = deformed_data
+            xyzti[static_condition] = static_data
 
         df = data_frame.copy()
         df['particle'] = xyzti[:, -1]
@@ -111,7 +124,7 @@ class ReliabilityRAFTSolver :
                         return i
         return -1
     
-    def __find_close_predictors__(self, linked_source, pts1, src_id, predictors_consider) :
+    def __find_close_predictors__(self, linked_source, pts1, src_id) :
         inds_tmp = np.argsort(np.sum((pts1 - pts1[src_id])**2, axis=1))
         predictor_ids = inds_tmp[inds_tmp != src_id]
         predictors_infos = []
@@ -123,7 +136,7 @@ class ReliabilityRAFTSolver :
 
         return predictors_infos
 
-    def __reliability_flow_tracker__(self, pts1, pts2, time):
+    def __reliability_flow_tracker__(self, pts1, pts2, time, prev_results):
         n_pts1, n_pts2 = pts1.shape[0], pts2.shape[0]
 
         # Find the nearest n_consider neighbours for pts1 and pts2
@@ -172,7 +185,7 @@ class ReliabilityRAFTSolver :
             if (len(predictors_infos) == 0) :
                 cur_stack_p -= 1
                 if (cur_stack_p < 0) : # taking any closest predictor
-                    predictors_infos = self.__find_close_predictors__(linked_source_pts, pts1, next_src_pt_id, self.predictors_consider)
+                    predictors_infos = self.__find_close_predictors__(linked_source_pts, pts1, next_src_pt_id)
                 else :
                     continue
             
@@ -209,9 +222,10 @@ class ReliabilityRAFTSolver :
                             break
                     else :
                         dest_id = min_idx
-                        stack_id = next((n for n in range(0, len(source_pts_stack)) if source_pts_stack[n] == bad_linked_src_id), -1)
+                        stack_id = source_pts_stack.index(bad_linked_src_id) if bad_linked_src_id in source_pts_stack else -1
                         linked_source_pts[bad_linked_src_id] = self.LinkInfo()
                         errors[bad_linked_src_id] = -1
+                        linked_dest_pts[dest_id] = -1
                         del source_pts_stack[stack_id]
 
             if (self.__is_big_error__(errors, penalty)) :
@@ -231,9 +245,93 @@ class ReliabilityRAFTSolver :
         trace = []
         if self.save_trace :
             trace = [np.array(pts1[link_info][:2]) for link_info in source_pts_stack]
-        links_arr = np.array([info.id for info in linked_source_pts])
-        return links_arr, trace
-        # return np.column_stack((np.arange(len(linked_source_pts)), links_arr))
+        links_arr = [info.id for info in linked_source_pts]
+        
+        all_links = []
+        all_links.append(self.ResultLinks(time, time+1, pts1, pts2, links_arr))
+        all_links.extend(prev_results)
+
+        if (self.memory <= 0 or time == 0) :
+            return all_links, trace
+        
+        # Memory
+        for i in range (1, self.memory + 1) :
+            new_src_links = self.ResultLinks(-1, -1, None, None, [])
+            for result_links in prev_results :
+                if (result_links.time_static == time - i) :
+                    new_src_links = result_links
+
+            if (new_src_links.time_static == -1) :
+                raise ValueError("Can't find link with time ", time - i, " !")
+
+            not_linked_src = [i for i, x in enumerate(new_src_links.links) if x == -2]
+
+            if len(not_linked_src) == 0 :
+                continue
+
+            near_neighb_inds_pts1 = self.__find_nearest_neighbors__(new_src_links.pts1, self.n_consider) # could be saved somewhere
+
+            result_link = self.ResultLinks(new_src_links.time_static, time+1, new_src_links.pts1, pts2, [-1] * new_src_links.pts1.shape[0])
+            # iterate through not linked pts
+            for next_src_pt_id in not_linked_src :
+                neighbours = [n for n in near_neighb_inds_pts1[next_src_pt_id] if new_src_links.links[n] >= 0]
+                prediction = self.__get_memory_prediction__(neighbours, new_src_links.time_static, time+1, all_links)
+                if prediction is None :
+                    continue
+
+                inds_near = self.__get_near_inds__(new_src_links.pts1[next_src_pt_id] + prediction, pts2) # add prediction
+                if (len(inds_near) == 0) :
+                    continue
+                
+                pm = self.__eval_penalties__(next_src_pt_id, inds_near, new_src_links.pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
+                dest_id = -1
+
+                while(dest_id == -1) :
+                    penalty = min(pm)
+                    min_idx = inds_near[np.argmin(pm)]
+
+                    if (linked_dest_pts[min_idx] == -1) :
+                        dest_id = min_idx
+                        break
+                    else :
+                        np.delete(inds_near, np.argmin(pm))
+                        del pm[np.argmin(pm)]
+                        if (len(pm) == 0) :
+                            dest_id = -2
+                            break
+
+                if (self.__is_big_error__(errors, penalty)) :
+                    dest_id = -2
+
+                if (dest_id != -2) :
+                    linked_dest_pts[dest_id] = next_src_pt_id
+
+                result_link.links[next_src_pt_id] = dest_id
+
+            all_links.append(result_link)
+            
+        return all_links, trace
+    
+    def __get_memory_prediction__(self, start_inds, time_static, time_deformed, all_links) :
+        prediction = np.zeros(3)
+        cur_inds = start_inds
+
+        for time in range (time_static, time_deformed) :
+            cur_links = self.ResultLinks(-1, -1, None, None, [])
+            for links in all_links :
+                if (links.time_static == time and links.time_deformed == time + 1) :
+                    cur_links = links
+
+            if (cur_links.time_static == -1) :
+                raise ValueError("Can't find link with static time ", time, " and deformed time ", time_deformed, " !")
+            
+            if len(cur_inds) == 0 :
+                return None
+        
+            prediction += np.mean([cur_links.pts2[cur_links.links[p]] - cur_links.pts1[p] for p in cur_inds], axis=0)
+            cur_inds = [cur_links.links[p] for p in cur_inds if cur_links.links[p] >= 0]
+        
+        return prediction
     
     def __is_big_error__(self, errors, error, min_errors_to_consider = 10) :
         if (error < 0) :

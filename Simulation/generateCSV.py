@@ -6,10 +6,10 @@ import random
 # Configuration Parameters
 IMAGE_SIZE_XY = 2000       # Size of the XY plane
 IMAGE_SIZE_Z = 1            # Size of the Z-axis
-NUM_PARTICLES = 2000      # Total number of particles
+NUM_PARTICLES = 600      # Total number of particles
 
-ADD_BLINKING = False         # Toggle blinking behavior
-BLINKING_NUM = 200          # Number of particles that blink per iteration
+ADD_BLINKING = True         # Toggle blinking behavior
+BLINKING_NUM = 50          # Number of particles that blink per iteration
 MEMORY = 1                  # Number of iterations a blinked particle remains invisible
 
 ITERATIONS = 2             # Number of deformation iterations
@@ -18,7 +18,7 @@ OUTPUT_DIR = 'generated_particle_data'  # Directory to save CSV files
 
 # Where particles will be generated
 ROI_MIN = [100, 100, 0]
-ROI_MAX = [500, 1900, IMAGE_SIZE_Z]
+ROI_MAX = [1000, 1000, IMAGE_SIZE_Z]
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)

@@ -120,22 +120,26 @@ def check_linking_accuracy(tracked_data, static_time, dynamic_time) :
 if __name__ == "__main__":
 
     CSV_FOLDER = 'generated_particle_data'
-    DO_RANDOM_SAMPLING = True
+    # CSV_FOLDER = 'memory_particle_data'
+
+    DO_RANDOM_SAMPLING = False
     SAMPLE_RATIO = 0.03
     SAMPLING_SEARCH_RADIUS_COEF = 2.5
 
-    ERROR_FUNCTION = 'L2' # 'L2' or 'STRAIN'
+    ERROR_FUNCTION = 'STRAIN' # 'L2' or 'STRAIN'
     SIGMA_THRESHOLD = 3.0
 
     MAX_DISP = 15
-    N_CONSIDER = 16
-    N_USE = 10
+    N_CONSIDER = 10 #16
+    N_USE = 8#10
 
     SAVE_TRACE = False
     TRACE_PATH = 'trace'
 
     CHECK_LINKING_ACCURACY = True
     LINKING_DATA_FILENAME = 'linked_data.csv'
+
+    MEMORY=0
 
     csv_file_names_list = get_csv_filenames(CSV_FOLDER)
 
@@ -155,12 +159,14 @@ if __name__ == "__main__":
         solver = ReliabilityRAFTSolver(3, DO_RANDOM_SAMPLING, maxdisp=MAX_DISP, \
                                        first_ids=first_ids, \
                                        n_consider=N_CONSIDER, n_use=N_USE, \
-                                       error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD)
+                                       error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD, \
+                                       memory=MEMORY)
     else :
         solver = ReliabilityRAFTSolver(3, DO_RANDOM_SAMPLING, maxdisp=MAX_DISP, \
                                        sample_ratio=SAMPLE_RATIO, sample_search_range_coef=SAMPLING_SEARCH_RADIUS_COEF, \
                                        n_consider=N_CONSIDER, n_use=N_USE, \
-                                       error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD)
+                                       error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD, \
+                                       memory=MEMORY)
 
     if SAVE_TRACE :
         solver.save_trace = True
@@ -172,7 +178,6 @@ if __name__ == "__main__":
             save_track_path_to_image(trace, TRACE_PATH + '/trace_{i}_{j}'.format(i=i,j=i+1))
     else :
         tracked_data, _ = solver.track_reliability_RAFT(combined_data)
-    # print(tracked_data)
 
     if CHECK_LINKING_ACCURACY :
         check_linking_accuracy(tracked_data, static_time=0, dynamic_time=len(csv_file_names_list)-1)

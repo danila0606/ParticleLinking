@@ -2,9 +2,12 @@ import numpy as np
 import pandas as pd
 import random
 
+NOT_TOUCHED = -1
+NOT_LINKED = -2
+
 class ReliabilityRAFTSolver :
     class LinkInfo:
-        def __init__(self, id=-1, error=float('inf')):
+        def __init__(self, id=NOT_TOUCHED, error=float('inf')):
             self.id = id
             self.error = error
 
@@ -64,7 +67,7 @@ class ReliabilityRAFTSolver :
         xyzt = data_frame[['x', 'y', 'z', 'time']].to_numpy()
 
         # Extract unique time points and trackable time indices
-        times = xyzt[:, -1]
+        times = xyzt[:, NOT_TOUCHED]
         unique_times = np.unique(times)
         trackable_times = unique_times[np.where(np.diff(unique_times) == 1)[0]]
 
@@ -80,7 +83,7 @@ class ReliabilityRAFTSolver :
             # res.extend(results)
             traces.append(trace)
         
-        xyzti = np.column_stack((xyzt, np.full((xyzt.shape[0], 1), -1)))
+        xyzti = np.column_stack((xyzt, np.full((xyzt.shape[0], 1), NOT_TOUCHED)))
 
         id = 0
         for time in range(len(unique_times) - 1) :
@@ -91,11 +94,11 @@ class ReliabilityRAFTSolver :
                 deformed_condition = xyzti[:, 3] == cur_link.time_deformed
                 deformed_data = xyzti[deformed_condition]
                 for src_id in range(0, len(cur_link.links)) :
-                    if (cur_link.links[src_id] == -1) :
+                    if (cur_link.links[src_id] == NOT_LINKED) :
                         continue
                     
 
-                    if static_data[src_id, 4] == -1 :
+                    if static_data[src_id, 4] == NOT_TOUCHED :
                         static_data[src_id, 4] = id
                         id += 1
 
@@ -116,13 +119,13 @@ class ReliabilityRAFTSolver :
     
     def __find_unlinked_source__(self, linked_source, pts1):
         for i, link in enumerate(linked_source):
-            if link.id == -1:
+            if link.id == NOT_TOUCHED:
                 dists = np.sum((pts1 - pts1[i])**2, axis=1)
                 neighbors = np.argsort(dists)
                 for neighbor in neighbors:
                     if linked_source[neighbor].id >= 0 and dists[neighbor] > self.maxdisp * self.sample_search_range_coef:
                         return i
-        return -1
+        return NOT_TOUCHED
     
     def __find_close_predictors__(self, linked_source, pts1, src_id) :
         inds_tmp = np.argsort(np.sum((pts1 - pts1[src_id])**2, axis=1))
@@ -145,11 +148,11 @@ class ReliabilityRAFTSolver :
 
         #Sampling
         start_id, dest_id, error = self.__sample_start_point__(pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2, time)
-        if dest_id == -1:
+        if dest_id == NOT_TOUCHED:
             raise ValueError("Bad sampling, try to change params!")
 
         linked_source_pts = [self.LinkInfo() for _ in range(n_pts1)]
-        linked_dest_pts = np.full(n_pts2, -1, dtype=int)
+        linked_dest_pts = np.full(n_pts2, NOT_TOUCHED, dtype=int)
         errors = np.full(n_pts1, -1.0)
 
         linked_source_pts[start_id] = self.LinkInfo(dest_id, error)
@@ -162,20 +165,20 @@ class ReliabilityRAFTSolver :
         while len(source_pts_stack) < n_pts1 :
             src_id = source_pts_stack[cur_stack_p]
             last_linked_pt_info = linked_source_pts[src_id]
-            if (last_linked_pt_info.id == -2) :
+            if (last_linked_pt_info.id == NOT_LINKED) :
                 cur_stack_p -= 1
                 if (cur_stack_p < 0) :
                     raise ValueError("Can't good predictor, try to change params!")
                 continue
 
             last_pt_neighbours = near_neighb_inds_pts1[src_id]
-            next_src_pt_id = next((n for n in last_pt_neighbours if linked_source_pts[n].id == -1), -1)
+            next_src_pt_id = next((n for n in last_pt_neighbours if linked_source_pts[n].id == NOT_TOUCHED), -1)
 
-            if next_src_pt_id == -1 :
+            if next_src_pt_id == NOT_TOUCHED :
                 cur_stack_p -= 1
                 if cur_stack_p < 0 :
                     next_src_pt_id = self.__find_unlinked_source__(linked_source_pts, pts1)
-                    if (next_src_pt_id == -1) : # Smth wrong!!!
+                    if (next_src_pt_id == NOT_TOUCHED) : # Smth wrong!!!
                         raise ValueError("Can't find next free particle, try to change params!")
                 else :
                     continue
@@ -194,21 +197,20 @@ class ReliabilityRAFTSolver :
             prediction = np.mean([pts2[p.id] - pts1[linked_dest_pts[p.id]] for p in predictors_infos], axis=0)
             
             inds_near = self.__get_near_inds__(pts1[next_src_pt_id] + prediction, pts2) # add prediction
+            dest_id = NOT_TOUCHED
+
             if inds_near.size == 0 :
-                inds_near = np.argsort(np.sum((pts2 - (pts1[next_src_pt_id] + prediction))**2, axis=1))[:self.n_consider]
-                inds_near = inds_near[inds_near != next_src_pt_id]
+                dest_id = NOT_LINKED
+                penalty = NOT_TOUCHED
+
+            if inds_near.size != 0 :
+                pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
             
-            if inds_near.size == 0 :
-                raise ValueError("Can't find neighbours for the particle, try to change params!")
-            
-            pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-            dest_id = -1
-            
-            while(dest_id == -1) :
+            while(dest_id == NOT_TOUCHED) :
                 penalty = min(pm)
                 min_idx = inds_near[np.argmin(pm)]
 
-                if (linked_dest_pts[min_idx] == -1) :
+                if (linked_dest_pts[min_idx] == NOT_TOUCHED) :
                     dest_id = min_idx
                     break
                 else :
@@ -218,24 +220,26 @@ class ReliabilityRAFTSolver :
                         np.delete(inds_near, np.argmin(pm))
                         del pm[np.argmin(pm)]
                         if (len(pm) == 0) :
-                            dest_id = -2
+                            dest_id = NOT_LINKED
                             break
                     else :
                         dest_id = min_idx
-                        stack_id = source_pts_stack.index(bad_linked_src_id) if bad_linked_src_id in source_pts_stack else -1
+                        stack_id = source_pts_stack.index(bad_linked_src_id) if bad_linked_src_id in source_pts_stack else NOT_TOUCHED
+                        if stack_id == NOT_TOUCHED :
+                            raise ValueError("Can't find previous wrong link!")
                         linked_source_pts[bad_linked_src_id] = self.LinkInfo()
-                        errors[bad_linked_src_id] = -1
-                        linked_dest_pts[dest_id] = -1
+                        errors[bad_linked_src_id] = NOT_TOUCHED
+                        linked_dest_pts[dest_id] = NOT_TOUCHED
                         del source_pts_stack[stack_id]
 
             if (self.__is_big_error__(errors, penalty)) :
-                dest_id = -2
+                dest_id = NOT_LINKED
 
-            if (dest_id != -2) :
+            if (dest_id != NOT_LINKED) :
                 linked_dest_pts[dest_id] = next_src_pt_id
                 errors[next_src_pt_id] = penalty
             else :
-                errors[next_src_pt_id] = -1
+                errors[next_src_pt_id] = NOT_TOUCHED
 
             linked_source_pts[next_src_pt_id] = self.LinkInfo(dest_id, penalty)
 
@@ -264,14 +268,14 @@ class ReliabilityRAFTSolver :
             if (new_src_links.time_static == -1) :
                 raise ValueError("Can't find link with time ", time - i, " !")
 
-            not_linked_src = [i for i, x in enumerate(new_src_links.links) if x == -2]
+            not_linked_src = [i for i, x in enumerate(new_src_links.links) if x == NOT_LINKED]
 
             if len(not_linked_src) == 0 :
                 continue
 
             near_neighb_inds_pts1 = self.__find_nearest_neighbors__(new_src_links.pts1, self.n_consider) # could be saved somewhere
 
-            result_link = self.ResultLinks(new_src_links.time_static, time+1, new_src_links.pts1, pts2, [-1] * new_src_links.pts1.shape[0])
+            result_link = self.ResultLinks(new_src_links.time_static, time+1, new_src_links.pts1, pts2, [NOT_TOUCHED] * new_src_links.pts1.shape[0])
             # iterate through not linked pts
             for next_src_pt_id in not_linked_src :
                 neighbours = [n for n in near_neighb_inds_pts1[next_src_pt_id] if new_src_links.links[n] >= 0]
@@ -284,26 +288,26 @@ class ReliabilityRAFTSolver :
                     continue
                 
                 pm = self.__eval_penalties__(next_src_pt_id, inds_near, new_src_links.pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
-                dest_id = -1
+                dest_id = NOT_TOUCHED
 
-                while(dest_id == -1) :
+                while(dest_id == NOT_TOUCHED) :
                     penalty = min(pm)
                     min_idx = inds_near[np.argmin(pm)]
 
-                    if (linked_dest_pts[min_idx] == -1) :
+                    if (linked_dest_pts[min_idx] == NOT_TOUCHED) :
                         dest_id = min_idx
                         break
                     else :
                         np.delete(inds_near, np.argmin(pm))
                         del pm[np.argmin(pm)]
                         if (len(pm) == 0) :
-                            dest_id = -2
+                            dest_id = NOT_LINKED
                             break
 
                 if (self.__is_big_error__(errors, penalty)) :
-                    dest_id = -2
+                    dest_id = NOT_LINKED
 
-                if (dest_id != -2) :
+                if (dest_id != NOT_LINKED) :
                     linked_dest_pts[dest_id] = next_src_pt_id
 
                 result_link.links[next_src_pt_id] = dest_id
@@ -429,10 +433,10 @@ class ReliabilityRAFTSolver :
             inds_near = self.__get_near_inds__(pts1[i], pts2, sample_start_point=True)
             if inds_near.size:
                 penalties = self.__eval_penalties__(i, inds_near, pts1, near_pts1, pts2, near_pts2)
-                dest_ids.append(inds_near[np.array(penalties).argmin()] if (len(penalties) > 0) else -1)
+                dest_ids.append(inds_near[np.array(penalties).argmin()] if (len(penalties) > 0) else NOT_TOUCHED)
                 errors.append(min(penalties) if (len(penalties) > 0) else float("inf"))
             else:
-                dest_ids.append(-1)
+                dest_ids.append(NOT_TOUCHED)
                 errors.append(float("inf"))
 
         errors = np.array(errors)

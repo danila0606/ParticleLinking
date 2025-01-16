@@ -194,15 +194,14 @@ class ReliabilityRAFTSolver :
             prediction = np.mean([pts2[p.id] - pts1[linked_dest_pts[p.id]] for p in predictors_infos], axis=0)
             
             inds_near = self.__get_near_inds__(pts1[next_src_pt_id] + prediction, pts2) # add prediction
-            if inds_near.size == 0 :
-                inds_near = np.argsort(np.sum((pts2 - (pts1[next_src_pt_id] + prediction))**2, axis=1))[:self.n_consider]
-                inds_near = inds_near[inds_near != next_src_pt_id]
-            
-            if inds_near.size == 0 :
-                raise ValueError("Can't find neighbours for the particle, try to change params!")
-            
-            pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
             dest_id = -1
+
+            if inds_near.size == 0 :
+                dest_id = -2
+                penalty = -1
+
+            if inds_near.size != 0 :
+                pm = self.__eval_penalties__(next_src_pt_id, inds_near, pts1, near_neighb_inds_pts1, pts2, near_neighb_inds_pts2)
             
             while(dest_id == -1) :
                 penalty = min(pm)

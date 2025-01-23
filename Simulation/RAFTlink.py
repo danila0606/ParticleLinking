@@ -12,16 +12,17 @@ class ReliabilityRAFTSolver :
             self.error = error
 
     class ResultLinks:
-        def __init__ (self, time_static, time_deformed, pts1, pts2, links):
+        def __init__ (self, time_static, time_deformed, pts1, pts2, links, errors = None, trace = None):
             self.time_static   = time_static
             self.time_deformed = time_deformed
             self.pts1          = pts1
             self.pts2          = pts2
             self.links         = links
+            self.errors        = errors
+            self.trace         = trace
 
-    def __init__(self, dim, do_random_sampling, maxdisp, \
-                 sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, \
-                 save_trace = False, \
+    def __init__(self, dim, maxdisp, \
+                 sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, my_predictors = None, \
                  error_f='L2', sigma_threshold = 3.0, \
                  memory=1, **kwargs) :
         
@@ -31,12 +32,9 @@ class ReliabilityRAFTSolver :
         self.error_f = error_f
         self.sigma_threshold = sigma_threshold
 
-        self.do_random_sampling = do_random_sampling
         self.sample_search_range_coef = sample_search_range_coef
         self.sample_ratio = sample_ratio
         self.maxdisp = maxdisp
-
-        self.save_trace = save_trace
 
         self.maxdisp_x = kwargs.get('x', maxdisp)
         self.maxdisp_y = kwargs.get('y', maxdisp)
@@ -47,6 +45,7 @@ class ReliabilityRAFTSolver :
         self.n_use = min(kwargs.get('n_use', 8), self.n_consider)
 
         self.first_ids = first_ids
+        self.my_predictors = my_predictors
 
         self.predictors_consider = 5
 
@@ -75,42 +74,49 @@ class ReliabilityRAFTSolver :
             raise ValueError("No consecutive time points found for tracking")
 
         res = []
-        traces = []
         for time in range(len(unique_times) - 1) :
             pts1 = xyzt[times == unique_times[time], :self.dim]
             pts2 = xyzt[times == unique_times[time + 1], :self.dim]
-            res, trace = self.__reliability_flow_tracker__(pts1, pts2, time, res)
-            # res.extend(results)
-            traces.append(trace)
+            res = self.__reliability_flow_tracker__(pts1, pts2, time, res)
         
-        xyzti = np.column_stack((xyzt, np.full((xyzt.shape[0], 1), NOT_TOUCHED)))
+        xyztiet = np.column_stack((xyzt, np.full((xyzt.shape[0], 1), NOT_TOUCHED), np.full((xyzt.shape[0], 1), NOT_TOUCHED), np.full((xyzt.shape[0], 1), NOT_TOUCHED)))
 
         id = 0
         for time in range(len(unique_times) - 1) :
-            static_condition = xyzti[:, 3] == time
-            static_data = xyzti[static_condition]
+            static_condition = xyztiet[:, 3] == time
+            static_data = xyztiet[static_condition]
             links = self.__get_links_with_time__(res, time)
             for cur_link in links :
-                deformed_condition = xyzti[:, 3] == cur_link.time_deformed
-                deformed_data = xyzti[deformed_condition]
+                deformed_condition = xyztiet[:, 3] == cur_link.time_deformed
+                deformed_data = xyztiet[deformed_condition]
                 for src_id in range(0, len(cur_link.links)) :
                     if (cur_link.links[src_id] == NOT_LINKED) :
                         continue
                     
-
                     if static_data[src_id, 4] == NOT_TOUCHED :
                         static_data[src_id, 4] = id
                         id += 1
 
                     deformed_data[cur_link.links[src_id], 4] = static_data[src_id, 4]
 
-                xyzti[deformed_condition] = deformed_data
-            xyzti[static_condition] = static_data
+                xyztiet[deformed_condition] = deformed_data
+                
+                if (cur_link.time_deformed == time + 1) :
+                    static_data[:, 5] = cur_link.errors
+                    order_id = 0
+                    for order in cur_link.trace :
+                        if cur_link.links[order] > 0 :
+                            static_data[order, 6] = order_id
+                            order_id += 1
+            
+            xyztiet[static_condition] = static_data
 
         df = data_frame.copy()
-        df['particle'] = xyzti[:, -1]
+        df['particle'] = xyztiet[:, 4].astype(int)
+        df['errors'] = xyztiet[:, 5]
+        df['trace'] = xyztiet[:, 6].astype(int)
 
-        return df, traces
+        return df
 
     def __find_nearest_neighbors__(self, pts, n_neighbors):
         dists = np.sum((pts[:, np.newaxis] - pts[np.newaxis, :])**2, axis=2)
@@ -159,11 +165,11 @@ class ReliabilityRAFTSolver :
         errors[start_id] = error
         linked_dest_pts[dest_id] = start_id
 
-        source_pts_stack = [start_id]
+        trace = [start_id]
         cur_stack_p = 0
 
-        while len(source_pts_stack) < n_pts1 :
-            src_id = source_pts_stack[cur_stack_p]
+        while len(trace) < n_pts1 :
+            src_id = trace[cur_stack_p]
             last_linked_pt_info = linked_source_pts[src_id]
             if (last_linked_pt_info.id == NOT_LINKED) :
                 cur_stack_p -= 1
@@ -224,13 +230,13 @@ class ReliabilityRAFTSolver :
                             break
                     else :
                         dest_id = min_idx
-                        stack_id = source_pts_stack.index(bad_linked_src_id) if bad_linked_src_id in source_pts_stack else NOT_TOUCHED
+                        stack_id = trace.index(bad_linked_src_id) if bad_linked_src_id in trace else NOT_TOUCHED
                         if stack_id == NOT_TOUCHED :
                             raise ValueError("Can't find previous wrong link!")
                         linked_source_pts[bad_linked_src_id] = self.LinkInfo()
                         errors[bad_linked_src_id] = NOT_TOUCHED
                         linked_dest_pts[dest_id] = NOT_TOUCHED
-                        del source_pts_stack[stack_id]
+                        del trace[stack_id]
 
             if (self.__is_big_error__(errors, penalty)) :
                 dest_id = NOT_LINKED
@@ -243,20 +249,17 @@ class ReliabilityRAFTSolver :
 
             linked_source_pts[next_src_pt_id] = self.LinkInfo(dest_id, penalty)
 
-            cur_stack_p = len(source_pts_stack)
-            source_pts_stack.append(next_src_pt_id)
+            cur_stack_p = len(trace)
+            trace.append(next_src_pt_id)
 
-        trace = []
-        if self.save_trace :
-            trace = [np.array(pts1[link_info][:2]) for link_info in source_pts_stack]
         links_arr = [info.id for info in linked_source_pts]
         
         all_links = []
-        all_links.append(self.ResultLinks(time, time+1, pts1, pts2, links_arr))
+        all_links.append(self.ResultLinks(time, time+1, pts1, pts2, links_arr, errors, trace))
         all_links.extend(prev_results)
 
         if (self.memory <= 0 or time == 0) :
-            return all_links, trace
+            return all_links
         
         # Memory
         for i in range (1, self.memory + 1) :
@@ -314,7 +317,7 @@ class ReliabilityRAFTSolver :
 
             all_links.append(result_link)
             
-        return all_links, trace
+        return all_links
     
     def __get_memory_prediction__(self, start_inds, time_static, time_deformed, all_links) :
         prediction = np.zeros(3)
@@ -418,8 +421,19 @@ class ReliabilityRAFTSolver :
 
 
     def __sample_start_point__(self, pts1, near_pts1, pts2, near_pts2, time) :
-        if self.do_random_sampling == False and self.first_ids:
+        def is_valid_list(lst):
+            return bool(lst) and any(sublist for sublist in lst)
+
+        if (self.first_ids is not None) and is_valid_list(self.first_ids):
             src, dst = self.first_ids[time]
+            error = self.__eval_penalty__(src, dst, pts1, near_pts1, pts2, near_pts2)
+            return src, dst, error
+        elif (self.my_predictors is not None) and is_valid_list(self.my_predictors):
+            crd1, crd2 = self.my_predictors[time]
+            dists1 = np.sum((pts1[:] - crd1)**2, axis=1)
+            dists2 = np.sum((pts2[:] - crd2)**2, axis=1)
+            src = np.argsort(dists1)[:1][0]
+            dst = np.argsort(dists2)[:1][0]
             error = self.__eval_penalty__(src, dst, pts1, near_pts1, pts2, near_pts2)
             return src, dst, error
 
@@ -443,3 +457,19 @@ class ReliabilityRAFTSolver :
         min_idx = errors.argmin()
         return sample_candidates[min_idx], dest_ids[min_idx], errors[min_idx]
 
+
+def REL_RAFT_link(combined_data, dim, maxdisp, \
+                 sample_ratio = 0.1, sample_search_range_coef = 3.5, 
+                 first_ids = None, my_predictors = None, \
+                 error_f='L2', sigma_threshold = 3.0, \
+                 memory=1, 
+                 **kwargs) :
+    
+    solver = ReliabilityRAFTSolver(dim, maxdisp=maxdisp, \
+                                    sample_ratio=sample_ratio, sample_search_range_coef=sample_search_range_coef,
+                                    first_ids=first_ids, my_predictors=my_predictors, \
+                                    error_f=error_f, sigma_threshold=sigma_threshold, \
+                                    memory=memory,
+                                    **kwargs)
+    
+    return solver.track_reliability_RAFT(combined_data)

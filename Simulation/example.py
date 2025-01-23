@@ -1,4 +1,4 @@
-from RAFTlink import ReliabilityRAFTSolver
+from RAFTlink import REL_RAFT_link
 import matplotlib.pyplot as plt
 import os
 import re
@@ -64,36 +64,30 @@ def get_csv_filenames(folder) :
     
     return sorted_filenames
 
-def save_track_path_to_image(trace, image_path) :
-    min_x = min(p[0] for p in trace)
-    max_x = max(p[0] for p in trace)
-    min_y = min(p[1] for p in trace)
-    max_y = max(p[1] for p in trace)
+def save_track_path_to_image(df, image_path) :
+    df = df[df['trace'] >= 0]
+    unique_frames = df['time'].unique()
+    
+    for frame in unique_frames:
+        df_current = df[df['time'] == frame]
 
-    # Create a black image with adjusted size
-    image_size = (int(max_y - min_y) + 1, int(max_x - min_x) + 1)
-    image = np.zeros(image_size)
-    n = len(trace)
-    # Create a color map based on the index
-    indices = np.arange(n)
-    colors = plt.cm.Reds(indices / n)  # Use 'viridis' colormap; normalize by dividing by `n`
+        x_min, x_max = df_current['x'].min(), df_current['x'].max()
+        y_min, y_max = df_current['y'].min(), df_current['y'].max()
 
-    # Plot the particles on the image
-    plt.figure(figsize=(8, 8))
-    plt.imshow(image, cmap='gray')  # Display the black background
+        plt.figure(figsize=(6, 6))
 
-    # Plot each particle with its color based on the index
-    for i, particle in enumerate(trace):
-        plt.scatter(particle[0] - min_x, particle[1] - min_y, color=colors[i], s=50)  # Adjust `s` for marker size
+        plt.xlim(x_min - 1, x_max + 1)
+        plt.ylim(y_min - 1, y_max + 1)
 
-    # Add a colorbar to show the mapping of index to color
-    sm = plt.cm.ScalarMappable(cmap='Reds', norm=plt.Normalize(0, n))
-    plt.colorbar(sm, label='Particle Index')
+        plt.scatter(df_current['x'], df_current['y'], c=df_current['trace'], cmap='Reds', s=15)
 
-    plt.title("Particles Placed on a Black Image")
-    plt.axis('off')  # Hide axis if desired
-    plt.savefig(image_path, bbox_inches='tight')
-    plt.close()
+        plt.colorbar(label='Linked Order')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.title(f'Particles at Frame {frame}')
+        plt.grid(True)
+        plt.savefig(image_path + '/trace_{i}_{j}'.format(i=frame,j=frame+1), bbox_inches='tight')
+        
 
 def check_linking_accuracy(tracked_data, static_time, dynamic_time) :
     linked_static = tracked_data[tracked_data['time'] == static_time][['particle', 'id']].rename(columns={'id': f'id_static'})
@@ -119,24 +113,26 @@ def check_linking_accuracy(tracked_data, static_time, dynamic_time) :
 
 if __name__ == "__main__":
 
-    CSV_FOLDER = 'generated_particle_data'
+    CSV_FOLDER = 'big_disp_data'
     # CSV_FOLDER = 'memory_particle_data'
-
-    DO_RANDOM_SAMPLING = False
+    
+    USE_IDS_FROM_GUI = False
+    first_ids = [[]]
+    my_predictors = [[np.array([205, 635, 458]), np.array([205, 665, 458])]]
     SAMPLE_RATIO = 0.03
     SAMPLING_SEARCH_RADIUS_COEF = 2.5
 
     ERROR_FUNCTION = 'STRAIN' # 'L2' or 'STRAIN'
     SIGMA_THRESHOLD = 3.0
 
-    MAX_DISP = 15
-    N_CONSIDER = 10 #16
-    N_USE = 8#10
+    MAX_DISP = 20
+    N_CONSIDER = 15
+    N_USE = 10
 
-    SAVE_TRACE = False
+    SAVE_TRACE = True
     TRACE_PATH = 'trace'
 
-    CHECK_LINKING_ACCURACY = True
+    CHECK_LINKING_ACCURACY = False
     LINKING_DATA_FILENAME = 'linked_data.csv'
 
     MEMORY=0
@@ -151,33 +147,22 @@ if __name__ == "__main__":
     
     combined_data = pd.concat(data, ignore_index=True)
 
-    first_ids = []
-    if not DO_RANDOM_SAMPLING :
+    if USE_IDS_FROM_GUI :
         for i in range(len(csv_file_names_list) - 1) :
             first_ids.append(choose_start_GUI(data[i], data[i + 1]))
 
-        solver = ReliabilityRAFTSolver(3, DO_RANDOM_SAMPLING, maxdisp=MAX_DISP, \
-                                       first_ids=first_ids, \
-                                       n_consider=N_CONSIDER, n_use=N_USE, \
-                                       error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD, \
-                                       memory=MEMORY)
-    else :
-        solver = ReliabilityRAFTSolver(3, DO_RANDOM_SAMPLING, maxdisp=MAX_DISP, \
-                                       sample_ratio=SAMPLE_RATIO, sample_search_range_coef=SAMPLING_SEARCH_RADIUS_COEF, \
-                                       n_consider=N_CONSIDER, n_use=N_USE, \
-                                       error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD, \
-                                       memory=MEMORY)
+    tracked_data = REL_RAFT_link(combined_data, 3, maxdisp=MAX_DISP, \
+                                first_ids=first_ids, my_predictors=my_predictors, \
+                                sample_ratio=SAMPLE_RATIO, sample_search_range_coef=SAMPLING_SEARCH_RADIUS_COEF, \
+                                n_consider=N_CONSIDER, n_use=N_USE, \
+                                error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD, \
+                                memory=MEMORY)
 
     if SAVE_TRACE :
-        solver.save_trace = True
-        tracked_data, traces = solver.track_reliability_RAFT(combined_data)
         if not os.path.exists(TRACE_PATH):
             os.makedirs(TRACE_PATH)
 
-        for i, trace in enumerate(traces) :
-            save_track_path_to_image(trace, TRACE_PATH + '/trace_{i}_{j}'.format(i=i,j=i+1))
-    else :
-        tracked_data, _ = solver.track_reliability_RAFT(combined_data)
+        save_track_path_to_image(tracked_data, TRACE_PATH)
 
     if CHECK_LINKING_ACCURACY :
         check_linking_accuracy(tracked_data, static_time=0, dynamic_time=len(csv_file_names_list)-1)

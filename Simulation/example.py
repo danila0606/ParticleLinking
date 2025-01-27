@@ -116,9 +116,12 @@ if __name__ == "__main__":
     CSV_FOLDER = 'big_disp_data'
     # CSV_FOLDER = 'memory_particle_data'
     
+    DIM = 3
+    COLUMN_NAMES = ['time', 'z', 'y', 'x']
+
     USE_IDS_FROM_GUI = False
-    first_ids = [[]]
-    my_predictors = [[np.array([205, 635, 458]), np.array([205, 665, 458])]]
+    first_ids = []
+    my_predictors = [[np.array([458, 635, 205]), np.array([458, 665, 205])]]
     SAMPLE_RATIO = 0.03
     SAMPLING_SEARCH_RADIUS_COEF = 2.5
 
@@ -142,7 +145,7 @@ if __name__ == "__main__":
     data = []
     for i in range(len(csv_file_names_list)) :
         tmp_data = pd.read_csv(CSV_FOLDER + '/' + csv_file_names_list[i])
-        tmp_data['time'] = i
+        tmp_data[COLUMN_NAMES[0]] = i
         data.append(tmp_data)
     
     combined_data = pd.concat(data, ignore_index=True)
@@ -151,7 +154,8 @@ if __name__ == "__main__":
         for i in range(len(csv_file_names_list) - 1) :
             first_ids.append(choose_start_GUI(data[i], data[i + 1]))
 
-    tracked_data = REL_RAFT_link(combined_data, 3, maxdisp=MAX_DISP, \
+    tracked_data = REL_RAFT_link(combined_data, DIM, maxdisp=MAX_DISP, \
+                                 column_names=COLUMN_NAMES,
                                 first_ids=first_ids, my_predictors=my_predictors, \
                                 sample_ratio=SAMPLE_RATIO, sample_search_range_coef=SAMPLING_SEARCH_RADIUS_COEF, \
                                 n_consider=N_CONSIDER, n_use=N_USE, \

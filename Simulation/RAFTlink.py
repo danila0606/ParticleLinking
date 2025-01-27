@@ -22,6 +22,7 @@ class ReliabilityRAFTSolver :
             self.trace         = trace
 
     def __init__(self, dim, maxdisp, \
+                 column_names = ['time', 'z', 'y', 'x'],
                  sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, my_predictors = None, \
                  error_f='L2', sigma_threshold = 3.0, \
                  memory=1, **kwargs) :
@@ -35,6 +36,8 @@ class ReliabilityRAFTSolver :
         self.sample_search_range_coef = sample_search_range_coef
         self.sample_ratio = sample_ratio
         self.maxdisp = maxdisp
+
+        self.column_names = column_names
 
         self.maxdisp_x = kwargs.get('x', maxdisp)
         self.maxdisp_y = kwargs.get('y', maxdisp)
@@ -63,7 +66,12 @@ class ReliabilityRAFTSolver :
 
     def track_reliability_RAFT(self, data_frame):
         # Set optional parameters from kwargs
-        xyzt = data_frame[['x', 'y', 'z', 'time']].to_numpy()
+        if self.dim == 2 :
+            xyzt = data_frame[[self.column_names[1], self.column_names[2], self.column_names[0]]].to_numpy()
+        elif self.dim == 3 :
+            xyzt = data_frame[[self.column_names[1], self.column_names[2], self.column_names[3], self.column_names[0]]].to_numpy()
+        else :
+            raise ValueError("Unsupported dim: " + str(self.dim))
 
         # Extract unique time points and trackable time indices
         times = xyzt[:, NOT_TOUCHED]
@@ -83,38 +91,38 @@ class ReliabilityRAFTSolver :
 
         id = 0
         for time in range(len(unique_times) - 1) :
-            static_condition = xyztiet[:, 3] == time
+            static_condition = xyztiet[:, self.dim] == time
             static_data = xyztiet[static_condition]
             links = self.__get_links_with_time__(res, time)
             for cur_link in links :
-                deformed_condition = xyztiet[:, 3] == cur_link.time_deformed
+                deformed_condition = xyztiet[:, self.dim] == cur_link.time_deformed
                 deformed_data = xyztiet[deformed_condition]
                 for src_id in range(0, len(cur_link.links)) :
                     if (cur_link.links[src_id] == NOT_LINKED) :
                         continue
                     
-                    if static_data[src_id, 4] == NOT_TOUCHED :
-                        static_data[src_id, 4] = id
+                    if static_data[src_id, self.dim+1] == NOT_TOUCHED :
+                        static_data[src_id, self.dim+1] = id
                         id += 1
 
-                    deformed_data[cur_link.links[src_id], 4] = static_data[src_id, 4]
+                    deformed_data[cur_link.links[src_id], self.dim+1] = static_data[src_id, self.dim+1]
 
                 xyztiet[deformed_condition] = deformed_data
                 
                 if (cur_link.time_deformed == time + 1) :
-                    static_data[:, 5] = cur_link.errors
+                    static_data[:, self.dim+2] = cur_link.errors
                     order_id = 0
                     for order in cur_link.trace :
                         if cur_link.links[order] > 0 :
-                            static_data[order, 6] = order_id
+                            static_data[order, self.dim+3] = order_id
                             order_id += 1
             
             xyztiet[static_condition] = static_data
 
         df = data_frame.copy()
-        df['particle'] = xyztiet[:, 4].astype(int)
-        df['errors'] = xyztiet[:, 5]
-        df['trace'] = xyztiet[:, 6].astype(int)
+        df['particle'] = xyztiet[:, self.dim+1].astype(int)
+        df['errors']   = xyztiet[:, self.dim+2]
+        df['trace']    = xyztiet[:, self.dim+3].astype(int)
 
         return df
 
@@ -383,7 +391,7 @@ class ReliabilityRAFTSolver :
             deltas = np.linalg.norm(diff, axis=2)
             ri_lens = np.linalg.norm(ri, axis=1)
             dij = deltas / ri_lens[:, np.newaxis]
-            errors = np.sqrt(np.partition(dij.min(axis=1), self.n_use)[:self.n_use])
+            errors = np.sqrt(np.partition(dij.min(axis=1), min(self.n_use, dij.min(axis=1).shape[0] - 1))[:self.n_use])
             good_errors = self.__remove_outliers__(errors)
             return errors.sum()
     
@@ -459,13 +467,15 @@ class ReliabilityRAFTSolver :
 
 
 def REL_RAFT_link(combined_data, dim, maxdisp, \
-                 sample_ratio = 0.1, sample_search_range_coef = 3.5, 
-                 first_ids = None, my_predictors = None, \
-                 error_f='L2', sigma_threshold = 3.0, \
+                  column_names = ['time', 'z', 'y', 'x'],
+                 sample_ratio=0.1, sample_search_range_coef=3.5, 
+                 first_ids=None, my_predictors=None, \
+                 error_f='L2', sigma_threshold=3.0, \
                  memory=1, 
                  **kwargs) :
     
     solver = ReliabilityRAFTSolver(dim, maxdisp=maxdisp, \
+                                    column_names=column_names,
                                     sample_ratio=sample_ratio, sample_search_range_coef=sample_search_range_coef,
                                     first_ids=first_ids, my_predictors=my_predictors, \
                                     error_f=error_f, sigma_threshold=sigma_threshold, \

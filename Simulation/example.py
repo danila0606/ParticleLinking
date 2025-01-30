@@ -145,7 +145,7 @@ if __name__ == "__main__":
     data = []
     for i in range(len(csv_file_names_list)) :
         tmp_data = pd.read_csv(CSV_FOLDER + '/' + csv_file_names_list[i])
-        tmp_data[COLUMN_NAMES[0]] = i
+        tmp_data[COLUMN_NAMES[0]] = i+1
         data.append(tmp_data)
     
     combined_data = pd.concat(data, ignore_index=True)
@@ -155,12 +155,12 @@ if __name__ == "__main__":
             first_ids.append(choose_start_GUI(data[i], data[i + 1]))
 
     tracked_data = REL_RAFT_link(combined_data, DIM, maxdisp=MAX_DISP, \
-                                 column_names=COLUMN_NAMES,
-                                first_ids=first_ids, my_predictors=my_predictors, \
-                                sample_ratio=SAMPLE_RATIO, sample_search_range_coef=SAMPLING_SEARCH_RADIUS_COEF, \
-                                n_consider=N_CONSIDER, n_use=N_USE, \
-                                error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD, \
-                                memory=MEMORY)
+                                 n_consider=N_CONSIDER, n_use=N_USE, \
+                                 column_names=COLUMN_NAMES, \
+                                 first_ids=first_ids, my_predictors=my_predictors, \
+                                 sample_ratio=SAMPLE_RATIO, sample_search_range_coef=SAMPLING_SEARCH_RADIUS_COEF, \
+                                 error_f=ERROR_FUNCTION, sigma_threshold=SIGMA_THRESHOLD, \
+                                 memory=MEMORY)
 
     if SAVE_TRACE :
         if not os.path.exists(TRACE_PATH):

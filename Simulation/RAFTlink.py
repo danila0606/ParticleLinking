@@ -12,8 +12,6 @@ class ReliabilityRAFTSolver :
 
     Attributes
     ----------
-    dim : int
-        Considered dimension (2 or 3)
     maxdisp: float
         Maximum allowed offset
     n_consider : int
@@ -23,9 +21,6 @@ class ReliabilityRAFTSolver :
     column_names : list of strings
         The name of the columns in the particle dataset.
         The first string is the name of the time column, then the column names are patricle's coordinates in the order "z, y, x" for 3D or "y, x" for 2D
-    first_ids : list[list[int]]
-        A list of [src_id, dst_id] pairs in the current pair of frames used to initialize the predictor
-        If the list is empty, uses 'my_predictors'
     my_predictors : list[list[numpy array of shape 'dim']]
         A list of [src coordinate, dst coordinate] pairs in the current pair of frames used to initialize the predictor
         If the list is empty, uses random sampling
@@ -80,15 +75,13 @@ class ReliabilityRAFTSolver :
             self.errors        = errors
             self.trace         = trace
 
-    def __init__(self, dim, maxdisp, \
+    def __init__(self, maxdisp, \
                  n_consider=10, n_use=8, \
                  column_names = ['time', 'z', 'y', 'x'], \
-                 sample_ratio = 0.1, sample_search_range_coef = 3.5, first_ids = None, my_predictors = None, \
+                 sample_ratio = 0.1, sample_search_range_coef = 3.5, my_predictors = None, \
                  error_f='L2', sigma_threshold = 3.0, \
                  memory=0, **kwargs) :
         
-        self.dim = dim
-
         self.maxdisp = maxdisp
         self.maxdisp_z = kwargs.get('maxdisp_z', maxdisp)
         self.maxdisp_y = kwargs.get('maxdisp_y', maxdisp)
@@ -98,10 +91,10 @@ class ReliabilityRAFTSolver :
         self.n_use = n_use
 
         self.column_names = column_names
+        self.dim = len(column_names) - 1
 
         self.sample_ratio = sample_ratio
         self.sample_search_range_coef = sample_search_range_coef
-        self.first_ids = first_ids
         self.my_predictors = my_predictors
 
         if error_f not in ['L2', 'STRAIN']:
@@ -365,6 +358,8 @@ class ReliabilityRAFTSolver :
         
         # Memory
         for i in range (1, self.memory + 1) :
+            if (time - i < 0) :
+                continue
             # Select previous link, which can be considered
             old_links = next(
                 (prev_links for prev_links in prev_results 
@@ -493,7 +488,7 @@ class ReliabilityRAFTSolver :
             ri = pts1[near_pts1[src_id]] - pts1[src_id]
             rj = pts2[near_pts2[dst_id]] - pts2[dst_id]
             dij = np.sum(ri**2, axis=1)[:, None] + np.sum(rj**2, axis=1) - 2 * ri.dot(rj.T)
-            errors = np.sqrt(np.partition(dij.min(axis=1), self.n_use)[:self.n_use])
+            errors = np.sqrt(np.partition(dij.min(axis=1), min(self.n_use, dij.min(axis=1).shape[0] - 1))[:self.n_use])
             # errors = self.__remove_outliers__(errors)
             return errors.sum()
         else : # Strain
@@ -558,11 +553,7 @@ class ReliabilityRAFTSolver :
         def is_valid_list(lst):
             return bool(lst) and any(sublist for sublist in lst)
 
-        if (self.first_ids is not None) and is_valid_list(self.first_ids):
-            src, dst = self.first_ids[time]
-            error = self.__eval_penalty__(src, dst, pts1, near_pts1, pts2, near_pts2)
-            return src, dst, error
-        elif (self.my_predictors is not None) and is_valid_list(self.my_predictors):
+        if (self.my_predictors is not None) and is_valid_list(self.my_predictors):
             crd1, crd2 = self.my_predictors[time]
             dists1 = np.sum((pts1[:] - crd1)**2, axis=1)
             dists2 = np.sum((pts2[:] - crd2)**2, axis=1)
@@ -593,20 +584,20 @@ class ReliabilityRAFTSolver :
         return sample_candidates[min_idx], dest_ids[min_idx], errors[min_idx]
 
 
-def REL_RAFT_link(combined_data, dim, maxdisp, \
+def REL_RAFT_link(combined_data, maxdisp, \
                   n_consider=10, n_use=8, \
                   column_names = ['time', 'z', 'y', 'x'], \
                   sample_ratio=0.1, sample_search_range_coef=3.5, \
-                  first_ids=None, my_predictors=None, \
+                  my_predictors=None, \
                   error_f='L2', sigma_threshold=3.0, \
                   memory=0, \
                   **kwargs) :
     
-    solver = ReliabilityRAFTSolver( dim, maxdisp=maxdisp, \
+    solver = ReliabilityRAFTSolver( maxdisp=maxdisp, \
                                     n_consider=n_consider, n_use=n_use, \
                                     column_names=column_names, \
                                     sample_ratio=sample_ratio, sample_search_range_coef=sample_search_range_coef, \
-                                    first_ids=first_ids, my_predictors=my_predictors, \
+                                    my_predictors=my_predictors, \
                                     error_f=error_f, sigma_threshold=sigma_threshold, \
                                     memory=memory, \
                                     **kwargs)
